@@ -25,7 +25,8 @@
   },
   "homepage": "https://github.com/holepunchto/bare-rpc#readme",
   "dependencies": {
-    "compact-encoding": "^2.15.0"
+    "compact-encoding": "^2.15.0",
+    "safety-catch": "^1.0.2"
   },
   "devDependencies": {
     "bare-stream": "^2.1.3",

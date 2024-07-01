@@ -1,3 +1,4 @@
+const safetyCatch = require('safety-catch')
 const c = require('compact-encoding')
 const m = require('./lib/messages')
 const { type } = require('./lib/constants')
@@ -47,6 +48,17 @@ module.exports = class RPC {
     }))
   }
 
+  _error (request, err) {
+    this._stream.write(c.encode(m.message, {
+      type: type.RESPONSE,
+      id: request.id,
+      error: true,
+      message: err.message,
+      code: err.code || '',
+      status: err.errno || 0
+    }))
+  }
+
   _ondata (data) {
     if (this._buffer === null) this._buffer = data
     else this._buffer = Buffer.concat([this._buffer, data])
@@ -58,18 +70,34 @@ module.exports = class RPC {
       try {
         message = m.message.decode(state)
       } catch (err) {
-        // TODO
+        safetyCatch(err)
+
+        return this._stream.destroy(err)
       }
 
       if (message === null) return
 
       switch (message.type) {
-        case type.REQUEST:
-          this._onrequest(new IncomingRequest(this, message.id, message.command, message.data))
+        case type.REQUEST: {
+          const request = new IncomingRequest(this, message.id, message.command, message.data)
+
+          try {
+            this._onrequest(request)
+          } catch (err) {
+            safetyCatch(err)
+
+            this._error(request, err)
+          }
+
           break
+        }
 
         case type.RESPONSE:
-          this._onresponse(message)
+          try {
+            this._onresponse(message)
+          } catch (err) {
+            safetyCatch(err)
+          }
       }
 
       this._buffer = state.start === state.end ? null : this._buffer.subarray(state.start)
