@@ -47,10 +47,6 @@ module.exports = class RPC {
     }))
   }
 
-  _receive (request) {
-    return this._requests.get(request.id)
-  }
-
   _ondata (data) {
     if (this._buffer === null) this._buffer = data
     else this._buffer = Buffer.concat([this._buffer, data])
