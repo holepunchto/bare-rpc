@@ -35,6 +35,7 @@ module.exports = class RPC {
       type: type.REQUEST,
       id,
       command: request.command,
+      stream: 0,
       data
     }))
   }
@@ -44,6 +45,7 @@ module.exports = class RPC {
       type: type.RESPONSE,
       id: request.id,
       error: false,
+      stream: 0,
       data
     }))
   }
@@ -53,6 +55,7 @@ module.exports = class RPC {
       type: type.RESPONSE,
       id: request.id,
       error: true,
+      stream: 0,
       message: err.message,
       code: err.code || '',
       status: err.errno || 0
@@ -98,6 +101,8 @@ module.exports = class RPC {
           } catch (err) {
             safetyCatch(err)
           }
+
+          break
       }
 
       this._buffer = state.start === state.end ? null : this._buffer.subarray(state.start)
