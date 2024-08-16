@@ -1,10 +1,11 @@
 const safetyCatch = require('safety-catch')
 const c = require('compact-encoding')
-const { Writable, Readable } = require('bare-stream')
 const m = require('./lib/messages')
 const { type, stream } = require('./lib/constants')
 const IncomingRequest = require('./lib/incoming-request')
+const IncomingStream = require('./lib/incoming-stream')
 const OutgoingRequest = require('./lib/outgoing-request')
+const OutgoingStream = require('./lib/outgoing-stream')
 
 module.exports = class RPC {
   constructor (stream, onrequest) {
@@ -28,18 +29,22 @@ module.exports = class RPC {
     return new OutgoingRequest(this, command)
   }
 
-  _sendRequest (request, data) {
+  _sendMessage (message) {
+    this._stream.write(c.encode(m.message, message))
+  }
+
+  _sendRequest (request, data = null) {
     const id = request.id = ++this._id
 
     this._outgoing.set(id, request)
 
-    this._stream.write(c.encode(m.message, {
+    this._sendMessage({
       type: type.REQUEST,
       id,
       command: request.command,
       stream: 0,
       data
-    }))
+    })
   }
 
   _createRequestStream (request, isInitiator) {
@@ -48,98 +53,36 @@ module.exports = class RPC {
 
       this._outgoing.set(id, request)
 
-      this._stream.write(c.encode(m.message, {
-        type: type.REQUEST,
-        id,
-        command: request.command,
-        stream: stream.OPEN,
-        data: null
-      }))
-
-      request._requestStream = new Writable({
-        write: (data, encoding, cb) => {
-          this._stream.write(c.encode(m.message, {
-            type: type.STREAM,
-            id,
-            stream: stream.DATA | stream.REQUEST,
-            data
-          }))
-
-          cb(null)
-        },
-        final: (cb) => {
-          this._stream.write(c.encode(m.message, {
-            type: type.STREAM,
-            id,
-            stream: stream.END | stream.REQUEST,
-            data: null
-          }))
-
-          cb(null)
-        }
-      })
+      request._requestStream = new OutgoingStream(this, request, type.REQUEST)
     } else {
       this._incoming.set(request.id, request)
 
-      request._requestStream = new Readable({
-        final: (cb) => {
-          this._incoming.delete(request.id)
+      request._requestStream = new IncomingStream(this, request, type.REQUEST)
 
-          cb(null)
-        }
-      })
+      request._requestStream.on('close', () => this._incoming.delete(request.id))
     }
   }
 
   _sendResponse (request, data) {
-    this._stream.write(c.encode(m.message, {
+    this._sendMessage({
       type: type.RESPONSE,
       id: request.id,
       error: false,
       stream: 0,
       data
-    }))
+    })
   }
 
   _createResponseStream (request, isInitiator) {
     if (isInitiator) {
-      this._stream.write(c.encode(m.message, {
-        type: type.RESPONSE,
-        id: request.id,
-        error: false,
-        stream: stream.OPEN,
-        data: null
-      }))
-
-      request._responseStream = new Writable({
-        write: (data, encoding, cb) => {
-          this._stream.write(c.encode(m.message, {
-            type: type.STREAM,
-            id: request.id,
-            stream: stream.DATA | stream.RESPONSE,
-            data
-          }))
-
-          cb(null)
-        },
-        final: (cb) => {
-          this._stream.write(c.encode(m.message, {
-            type: type.STREAM,
-            id: request.id,
-            stream: stream.END | stream.RESPONSE,
-            data: null
-          }))
-
-          cb(null)
-        }
-      })
+      request._responseStream = new OutgoingStream(this, request, stream.RESPONSE)
     } else {
-      request._responseStream = new Readable()
+      request._responseStream = new IncomingStream(this, request, stream.RESPONSE)
     }
   }
 
   _sendError (request, err) {
-    this._stream.write(c.encode(m.message, {
+    this._sendMessage({
       type: type.RESPONSE,
       id: request.id,
       error: true,
@@ -147,7 +90,7 @@ module.exports = class RPC {
       message: err.message,
       code: err.code || '',
       status: err.errno || 0
-    }))
+    })
   }
 
   _ondata (data) {
