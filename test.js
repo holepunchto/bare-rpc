@@ -16,8 +16,8 @@ test('basic', async (t) => {
   t.alike(await req.reply(), Buffer.from('pong'))
 })
 
-test('streams', async (t) => {
-  t.plan(5)
+test('request stream', async (t) => {
+  t.plan(4)
 
   const rpc = new RPC(new PassThrough(), (req) => {
     t.is(req.command, 'heartbeat')
@@ -28,8 +28,7 @@ test('streams', async (t) => {
       .on('end', () => {
         t.pass('stream ended')
 
-        const reply = req.createResponseStream()
-        reply.end('bar')
+        req.reply('bar')
       })
   })
 
@@ -37,6 +36,23 @@ test('streams', async (t) => {
 
   const stream = req.createRequestStream()
   stream.end('foo')
+
+  t.alike(await req.reply(), Buffer.from('bar'))
+})
+
+test('response stream', async (t) => {
+  t.plan(4)
+
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 'heartbeat')
+    t.alike(req.data, Buffer.from('foo'))
+
+    const reply = req.createResponseStream()
+    reply.end('bar')
+  })
+
+  const req = rpc.request('heartbeat')
+  req.send('foo')
 
   const reply = req.createResponseStream()
   reply

@@ -1,7 +1,7 @@
 const safetyCatch = require('safety-catch')
 const c = require('compact-encoding')
 const m = require('./lib/messages')
-const { type, stream } = require('./lib/constants')
+const { type: t, stream: s } = require('./lib/constants')
 const IncomingRequest = require('./lib/incoming-request')
 const IncomingStream = require('./lib/incoming-stream')
 const OutgoingRequest = require('./lib/outgoing-request')
@@ -12,8 +12,8 @@ module.exports = class RPC {
     this._stream = stream
 
     this._id = 0
-    this._responding = 0
-    this._outgoing = new Map()
+    this._requests = new Map()
+    this._responses = new Map()
     this._incoming = new Map()
 
     this._buffer = null
@@ -36,10 +36,10 @@ module.exports = class RPC {
   _sendRequest (request, data = null) {
     const id = request.id = ++this._id
 
-    this._outgoing.set(id, request)
+    this._requests.set(id, request)
 
     this._sendMessage({
-      type: type.REQUEST,
+      type: t.REQUEST,
       id,
       command: request.command,
       stream: 0,
@@ -51,21 +51,19 @@ module.exports = class RPC {
     if (isInitiator) {
       const id = request.id = ++this._id
 
-      this._outgoing.set(id, request)
+      this._requests.set(id, request)
 
-      request._requestStream = new OutgoingStream(this, request, type.REQUEST)
+      request._requestStream = new OutgoingStream(this, request, t.REQUEST)
     } else {
       this._incoming.set(request.id, request)
 
-      request._requestStream = new IncomingStream(this, request, type.REQUEST)
-
-      request._requestStream.on('close', () => this._incoming.delete(request.id))
+      request._requestStream = new IncomingStream(this, request, t.REQUEST)
     }
   }
 
   _sendResponse (request, data) {
     this._sendMessage({
-      type: type.RESPONSE,
+      type: t.RESPONSE,
       id: request.id,
       error: false,
       stream: 0,
@@ -75,15 +73,19 @@ module.exports = class RPC {
 
   _createResponseStream (request, isInitiator) {
     if (isInitiator) {
-      request._responseStream = new OutgoingStream(this, request, stream.RESPONSE)
+      this._responses.set(request.id, request)
+
+      request._responseStream = new OutgoingStream(this, request, t.RESPONSE)
     } else {
-      request._responseStream = new IncomingStream(this, request, stream.RESPONSE)
+      this._incoming.set(request.id, request)
+
+      request._responseStream = new IncomingStream(this, request, t.RESPONSE)
     }
   }
 
   _sendError (request, err) {
     this._sendMessage({
-      type: type.RESPONSE,
+      type: t.RESPONSE,
       id: request.id,
       error: true,
       stream: 0,
@@ -112,7 +114,7 @@ module.exports = class RPC {
       if (message === null) return
 
       switch (message.type) {
-        case type.REQUEST: {
+        case t.REQUEST: {
           const request = new IncomingRequest(this, message.id, message.command, message.data)
 
           try {
@@ -124,14 +126,14 @@ module.exports = class RPC {
           }
           break
         }
-        case type.RESPONSE:
+        case t.RESPONSE:
           try {
             this._onresponse(message)
           } catch (err) {
             safetyCatch(err)
           }
           break
-        case type.STREAM:
+        case t.STREAM:
           try {
             this._onstream(message)
           } catch (err) {
@@ -146,8 +148,7 @@ module.exports = class RPC {
   _onresponse (message) {
     if (message.id === 0) return
 
-    const request = this._outgoing.get(message.id)
-
+    const request = this._requests.get(message.id)
     if (request === undefined) return
 
     if (message.error) {
@@ -164,28 +165,62 @@ module.exports = class RPC {
   _onstream (message) {
     if (message.id === 0) return
 
-    let target
+    if (message.stream & s.OPEN) this._onstreamopen(message)
+    else if (message.stream & s.DATA) this._onstreamdata(message)
+    else if (message.stream & s.END) this._onstreamend(message)
+  }
 
-    if (message.stream & stream.REQUEST) {
-      const request = this._incoming.get(message.id)
+  _onstreamopen (message) {
+    let stream
 
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
       if (request === undefined) return
 
-      target = request._requestStream
-    } else if (message.stream & stream.RESPONSE) {
-      const request = this._outgoing.get(message.id)
-
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
       if (request === undefined) return
 
-      target = request._responseStream
+      stream = request._responseStream
     } else {
       return
     }
 
-    if (message.stream & stream.DATA) {
-      target.push(message.data)
-    } else if (message.stream & stream.END) {
-      target.push(null)
+    stream._continueOpen()
+  }
+
+  _onstreamdata (message) {
+    const request = this._incoming.get(message.id)
+    if (request === undefined) return
+
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      stream = request._responseStream
+    } else {
+      return
     }
+
+    stream.push(message.data)
+  }
+
+  _onstreamend (message) {
+    const request = this._incoming.get(message.id)
+    if (request === undefined) return
+
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.push(null)
   }
 }
