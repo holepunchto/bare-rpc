@@ -1,7 +1,8 @@
 const safetyCatch = require('safety-catch')
 const c = require('compact-encoding')
+const { Writable, Readable } = require('bare-stream')
 const m = require('./lib/messages')
-const { type } = require('./lib/constants')
+const { type, stream } = require('./lib/constants')
 const IncomingRequest = require('./lib/incoming-request')
 const OutgoingRequest = require('./lib/outgoing-request')
 
@@ -11,7 +12,8 @@ module.exports = class RPC {
 
     this._id = 0
     this._responding = 0
-    this._requests = new Map()
+    this._outgoing = new Map()
+    this._incoming = new Map()
 
     this._buffer = null
 
@@ -26,10 +28,10 @@ module.exports = class RPC {
     return new OutgoingRequest(this, command)
   }
 
-  _send (request, data) {
-    const id = ++this._id
+  _sendRequest (request, data) {
+    const id = request.id = ++this._id
 
-    this._requests.set(id, request)
+    this._outgoing.set(id, request)
 
     this._stream.write(c.encode(m.message, {
       type: type.REQUEST,
@@ -40,7 +42,56 @@ module.exports = class RPC {
     }))
   }
 
-  _reply (request, data) {
+  _createRequestStream (request, isInitiator) {
+    if (isInitiator) {
+      const id = request.id = ++this._id
+
+      this._outgoing.set(id, request)
+
+      this._stream.write(c.encode(m.message, {
+        type: type.REQUEST,
+        id,
+        command: request.command,
+        stream: stream.OPEN,
+        data: null
+      }))
+
+      request._requestStream = new Writable({
+        write: (data, encoding, cb) => {
+          this._stream.write(c.encode(m.message, {
+            type: type.STREAM,
+            id,
+            stream: stream.DATA | stream.REQUEST,
+            data
+          }))
+
+          cb(null)
+        },
+        final: (cb) => {
+          this._stream.write(c.encode(m.message, {
+            type: type.STREAM,
+            id,
+            stream: stream.END | stream.REQUEST,
+            data: null
+          }))
+
+          cb(null)
+        }
+      })
+    } else {
+      this._incoming.set(request.id, request)
+
+      request._requestStream = new Readable({
+        final: (cb) => {
+          this._incoming.delete(request.id)
+
+          cb(null)
+        }
+      })
+    }
+  }
+
+  _sendResponse (request, data) {
     this._stream.write(c.encode(m.message, {
       type: type.RESPONSE,
       id: request.id,
@@ -50,7 +101,44 @@ module.exports = class RPC {
     }))
   }
 
-  _error (request, err) {
+  _createResponseStream (request, isInitiator) {
+    if (isInitiator) {
+      this._stream.write(c.encode(m.message, {
+        type: type.RESPONSE,
+        id: request.id,
+        error: false,
+        stream: stream.OPEN,
+        data: null
+      }))
+
+      request._responseStream = new Writable({
+        write: (data, encoding, cb) => {
+          this._stream.write(c.encode(m.message, {
+            type: type.STREAM,
+            id: request.id,
+            stream: stream.DATA | stream.RESPONSE,
+            data
+          }))
+
+          cb(null)
+        },
+        final: (cb) => {
+          this._stream.write(c.encode(m.message, {
+            type: type.STREAM,
+            id: request.id,
+            stream: stream.END | stream.RESPONSE,
+            data: null
+          }))
+
+          cb(null)
+        }
+      })
+    } else {
+      request._responseStream = new Readable()
+    }
+  }
+
+  _sendError (request, err) {
     this._stream.write(c.encode(m.message, {
       type: type.RESPONSE,
       id: request.id,
@@ -89,20 +177,23 @@ module.exports = class RPC {
           } catch (err) {
             safetyCatch(err)
 
-            this._error(request, err)
+            this._sendError(request, err)
           }
-
           break
         }
-
         case type.RESPONSE:
           try {
             this._onresponse(message)
           } catch (err) {
             safetyCatch(err)
           }
-
           break
+        case type.STREAM:
+          try {
+            this._onstream(message)
+          } catch (err) {
+            safetyCatch(err)
+          }
       }
 
       this._buffer = state.start === state.end ? null : this._buffer.subarray(state.start)
@@ -112,7 +203,7 @@ module.exports = class RPC {
   _onresponse (message) {
     if (message.id === 0) return
 
-    const request = this._requests.get(message.id)
+    const request = this._outgoing.get(message.id)
 
     if (request === undefined) return
 
@@ -122,8 +213,36 @@ module.exports = class RPC {
       err.errno = message.status
 
       request._reject(err)
-    } else {
+    } else if (message.stream === 0) {
       request._resolve(message.data)
+    }
+  }
+
+  _onstream (message) {
+    if (message.id === 0) return
+
+    let target
+
+    if (message.stream & stream.REQUEST) {
+      const request = this._incoming.get(message.id)
+
+      if (request === undefined) return
+
+      target = request._requestStream
+    } else if (message.stream & stream.RESPONSE) {
+      const request = this._outgoing.get(message.id)
+
+      if (request === undefined) return
+
+      target = request._responseStream
+    } else {
+      return
+    }
+
+    if (message.stream & stream.DATA) {
+      target.push(message.data)
+    } else if (message.stream & stream.END) {
+      target.push(null)
     }
   }
 }
