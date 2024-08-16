@@ -57,7 +57,9 @@ module.exports = class RPC {
     } else {
       this._incoming.set(request.id, request)
 
-      request._requestStream = new IncomingStream(this, request, t.REQUEST)
+      const stream = request._requestStream = new IncomingStream(this, request, t.REQUEST)
+
+      stream.on('close', () => this._incoming.delete(request.id))
     }
   }
 
@@ -79,7 +81,9 @@ module.exports = class RPC {
     } else {
       this._incoming.set(request.id, request)
 
-      request._responseStream = new IncomingStream(this, request, t.RESPONSE)
+      const stream = request._responseStream = new IncomingStream(this, request, t.RESPONSE)
+
+      stream.on('close', () => this._incoming.delete(request.id))
     }
   }
 
