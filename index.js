@@ -67,8 +67,8 @@ module.exports = class RPC {
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
-      error: false,
       stream: 0,
+      error: null,
       data
     })
   }
@@ -91,11 +91,9 @@ module.exports = class RPC {
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
-      error: true,
       stream: 0,
-      message: err.message,
-      code: err.code || '',
-      status: err.errno || 0
+      error: err,
+      data: null
     })
   }
 
@@ -156,11 +154,7 @@ module.exports = class RPC {
     if (request === undefined) return
 
     if (message.error) {
-      const err = new Error(`${message.message}`)
-      err.code = message.code
-      err.errno = message.status
-
-      request._reject(err)
+      request._reject(message.error)
     } else if (message.stream === 0) {
       request._resolve(message.data)
     }
@@ -170,8 +164,10 @@ module.exports = class RPC {
     if (message.id === 0) return
 
     if (message.stream & s.OPEN) this._onstreamopen(message)
+    else if (message.stream & s.CLOSE) this._onstreamclose(message)
     else if (message.stream & s.DATA) this._onstreamdata(message)
     else if (message.stream & s.END) this._onstreamend(message)
+    else if (message.stream & s.DESTROY) this._onstreamdestroy(message)
   }
 
   _onstreamopen (message) {
@@ -194,6 +190,24 @@ module.exports = class RPC {
     stream._continueOpen()
   }
 
+  _onstreamclose (message) {
+    const request = this._incoming.get(message.id)
+    if (request === undefined) return
+
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    if (message.error) stream.destroy(message.error)
+    else stream.push(null)
+  }
+
   _onstreamdata (message) {
     const request = this._incoming.get(message.id)
     if (request === undefined) return
@@ -208,7 +222,9 @@ module.exports = class RPC {
       return
     }
 
-    stream.push(message.data)
+    if (stream.push(message.data) === false) {
+      // TODO: Backpressure
+    }
   }
 
   _onstreamend (message) {
@@ -226,5 +242,25 @@ module.exports = class RPC {
     }
 
     stream.push(null)
+  }
+
+  _onstreamdestroy (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.destroy(message.error)
   }
 }
