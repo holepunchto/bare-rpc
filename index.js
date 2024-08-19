@@ -1,17 +1,20 @@
 const safetyCatch = require('safety-catch')
 const c = require('compact-encoding')
 const m = require('./lib/messages')
-const { type } = require('./lib/constants')
+const { type: t, stream: s } = require('./lib/constants')
 const IncomingRequest = require('./lib/incoming-request')
+const IncomingStream = require('./lib/incoming-stream')
 const OutgoingRequest = require('./lib/outgoing-request')
+const OutgoingStream = require('./lib/outgoing-stream')
 
 module.exports = class RPC {
   constructor (stream, onrequest) {
     this._stream = stream
 
     this._id = 0
-    this._responding = 0
     this._requests = new Map()
+    this._responses = new Map()
+    this._incoming = new Map()
 
     this._buffer = null
 
@@ -26,37 +29,72 @@ module.exports = class RPC {
     return new OutgoingRequest(this, command)
   }
 
-  _send (request, data) {
-    const id = ++this._id
+  _sendMessage (message) {
+    this._stream.write(c.encode(m.message, message))
+  }
+
+  _sendRequest (request, data = null) {
+    const id = request.id = ++this._id
 
     this._requests.set(id, request)
 
-    this._stream.write(c.encode(m.message, {
-      type: type.REQUEST,
+    this._sendMessage({
+      type: t.REQUEST,
       id,
       command: request.command,
+      stream: 0,
       data
-    }))
+    })
   }
 
-  _reply (request, data) {
-    this._stream.write(c.encode(m.message, {
-      type: type.RESPONSE,
-      id: request.id,
-      error: false,
-      data
-    }))
+  _createRequestStream (request, isInitiator, opts) {
+    if (isInitiator) {
+      const id = request.id = ++this._id
+
+      this._requests.set(id, request)
+
+      request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
+    } else {
+      this._incoming.set(request.id, request)
+
+      const stream = request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
+
+      stream.on('close', () => this._incoming.delete(request.id))
+    }
   }
 
-  _error (request, err) {
-    this._stream.write(c.encode(m.message, {
-      type: type.RESPONSE,
+  _sendResponse (request, data) {
+    this._sendMessage({
+      type: t.RESPONSE,
       id: request.id,
-      error: true,
-      message: err.message,
-      code: err.code || '',
-      status: err.errno || 0
-    }))
+      stream: 0,
+      error: null,
+      data
+    })
+  }
+
+  _createResponseStream (request, isInitiator, opts) {
+    if (isInitiator) {
+      this._responses.set(request.id, request)
+
+      request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
+    } else {
+      this._incoming.set(request.id, request)
+
+      const stream = request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
+
+      stream.on('close', () => this._incoming.delete(request.id))
+    }
+  }
+
+  _sendError (request, err) {
+    this._sendMessage({
+      type: t.RESPONSE,
+      id: request.id,
+      stream: 0,
+      error: err,
+      data: null
+    })
   }
 
   _ondata (data) {
@@ -78,7 +116,7 @@ module.exports = class RPC {
       if (message === null) return
 
       switch (message.type) {
-        case type.REQUEST: {
+        case t.REQUEST: {
           const request = new IncomingRequest(this, message.id, message.command, message.data)
 
           try {
@@ -86,15 +124,20 @@ module.exports = class RPC {
           } catch (err) {
             safetyCatch(err)
 
-            this._error(request, err)
+            this._sendError(request, err)
           }
-
           break
         }
-
-        case type.RESPONSE:
+        case t.RESPONSE:
           try {
             this._onresponse(message)
+          } catch (err) {
+            safetyCatch(err)
+          }
+          break
+        case t.STREAM:
+          try {
+            this._onstream(message)
           } catch (err) {
             safetyCatch(err)
           }
@@ -108,17 +151,164 @@ module.exports = class RPC {
     if (message.id === 0) return
 
     const request = this._requests.get(message.id)
-
     if (request === undefined) return
 
     if (message.error) {
-      const err = new Error(`${message.message}`)
-      err.code = message.code
-      err.errno = message.status
-
-      request._reject(err)
-    } else {
+      request._reject(message.error)
+    } else if (message.stream === 0) {
       request._resolve(message.data)
     }
+  }
+
+  _onstream (message) {
+    if (message.id === 0) return
+
+    if (message.stream & s.OPEN) this._onstreamopen(message)
+    else if (message.stream & s.CLOSE) this._onstreamclose(message)
+    else if (message.stream & s.PAUSE) this._onstreampause(message)
+    else if (message.stream & s.RESUME) this._onstreamresume(message)
+    else if (message.stream & s.DATA) this._onstreamdata(message)
+    else if (message.stream & s.END) this._onstreamend(message)
+    else if (message.stream & s.DESTROY) this._onstreamdestroy(message)
+  }
+
+  _onstreamopen (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream._continueOpen()
+  }
+
+  _onstreamclose (message) {
+    const request = this._incoming.get(message.id)
+    if (request === undefined) return
+
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    if (message.error) stream.destroy(message.error)
+    else stream.push(null)
+  }
+
+  _onstreampause (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.cork()
+  }
+
+  _onstreamresume (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.uncork()
+  }
+
+  _onstreamdata (message) {
+    const request = this._incoming.get(message.id)
+    if (request === undefined) return
+
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    if (stream.push(message.data) === false) {
+      this._sendMessage({
+        type: t.STREAM,
+        id: stream._request.id,
+        stream: stream._mask | s.PAUSE,
+        error: null,
+        data: null
+      })
+    }
+  }
+
+  _onstreamend (message) {
+    const request = this._incoming.get(message.id)
+    if (request === undefined) return
+
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.push(null)
+  }
+
+  _onstreamdestroy (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.destroy(message.error)
   }
 }
