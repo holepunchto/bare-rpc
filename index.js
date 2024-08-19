@@ -47,17 +47,17 @@ module.exports = class RPC {
     })
   }
 
-  _createRequestStream (request, isInitiator) {
+  _createRequestStream (request, isInitiator, opts) {
     if (isInitiator) {
       const id = request.id = ++this._id
 
       this._requests.set(id, request)
 
-      request._requestStream = new OutgoingStream(this, request, t.REQUEST)
+      request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
     } else {
       this._incoming.set(request.id, request)
 
-      const stream = request._requestStream = new IncomingStream(this, request, t.REQUEST)
+      const stream = request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
 
       stream.on('close', () => this._incoming.delete(request.id))
     }
@@ -73,15 +73,15 @@ module.exports = class RPC {
     })
   }
 
-  _createResponseStream (request, isInitiator) {
+  _createResponseStream (request, isInitiator, opts) {
     if (isInitiator) {
       this._responses.set(request.id, request)
 
-      request._responseStream = new OutgoingStream(this, request, t.RESPONSE)
+      request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
     } else {
       this._incoming.set(request.id, request)
 
-      const stream = request._responseStream = new IncomingStream(this, request, t.RESPONSE)
+      const stream = request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
 
       stream.on('close', () => this._incoming.delete(request.id))
     }
@@ -165,6 +165,8 @@ module.exports = class RPC {
 
     if (message.stream & s.OPEN) this._onstreamopen(message)
     else if (message.stream & s.CLOSE) this._onstreamclose(message)
+    else if (message.stream & s.PAUSE) this._onstreampause(message)
+    else if (message.stream & s.RESUME) this._onstreamresume(message)
     else if (message.stream & s.DATA) this._onstreamdata(message)
     else if (message.stream & s.END) this._onstreamend(message)
     else if (message.stream & s.DESTROY) this._onstreamdestroy(message)
@@ -208,6 +210,46 @@ module.exports = class RPC {
     else stream.push(null)
   }
 
+  _onstreampause (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.cork()
+  }
+
+  _onstreamresume (message) {
+    let stream
+
+    if (message.stream & s.REQUEST) {
+      const request = this._requests.get(message.id)
+      if (request === undefined) return
+
+      stream = request._requestStream
+    } else if (message.stream & s.RESPONSE) {
+      const request = this._responses.get(message.id)
+      if (request === undefined) return
+
+      stream = request._responseStream
+    } else {
+      return
+    }
+
+    stream.uncork()
+  }
+
   _onstreamdata (message) {
     const request = this._incoming.get(message.id)
     if (request === undefined) return
@@ -223,7 +265,13 @@ module.exports = class RPC {
     }
 
     if (stream.push(message.data) === false) {
-      // TODO: Backpressure
+      this._sendMessage({
+        type: t.STREAM,
+        id: stream._request.id,
+        stream: stream._mask | s.PAUSE,
+        error: null,
+        data: null
+      })
     }
   }
 
