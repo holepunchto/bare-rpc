@@ -1,4 +1,5 @@
 const safetyCatch = require('safety-catch')
+const b4a = require('b4a')
 const c = require('compact-encoding')
 const m = require('./lib/messages')
 const { type: t, stream: s } = require('./lib/constants')
@@ -99,7 +100,7 @@ module.exports = class RPC {
 
   _ondata (data) {
     if (this._buffer === null) this._buffer = data
-    else this._buffer = Buffer.concat([this._buffer, data])
+    else this._buffer = b4a.concat([this._buffer, data])
 
     while (this._buffer !== null) {
       const state = { start: 0, end: this._buffer.length, buffer: this._buffer }
