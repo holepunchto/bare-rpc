@@ -16,6 +16,20 @@ test('basic', async (t) => {
   t.alike(await req.reply(), Buffer.from('pong'))
 })
 
+test('reply encoding', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 'heartbeat')
+    t.alike(req.data, Buffer.from('ping'))
+
+    req.reply('pong')
+  })
+
+  const req = rpc.request('heartbeat')
+  req.send('cGluZw==', 'base64')
+
+  t.alike(await req.reply('utf8'), 'pong')
+})
+
 test('request stream', async (t) => {
   t.plan(4)
 
