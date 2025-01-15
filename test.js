@@ -61,12 +61,11 @@ test('request stream, force destroy by initiator', async (t) => {
     t.is(req.command, 'heartbeat')
 
     const stream = req.createRequestStream()
-    stream
-      .on('close', () => {
-        t.pass('stream closed')
+    stream.on('close', () => {
+      t.pass('stream closed')
 
-        req.reply('foo')
-      })
+      req.reply('foo')
+    })
   })
 
   const req = rpc.request('heartbeat')
@@ -94,8 +93,7 @@ test('request stream, force destroy by initiatee', async (t) => {
   const req = rpc.request('heartbeat')
 
   const stream = req.createRequestStream()
-  stream
-    .on('close', () => t.pass('stream closed'))
+  stream.on('close', () => t.pass('stream closed'))
 
   t.alike(await req.reply(), Buffer.from('foo'))
 })
@@ -136,8 +134,7 @@ test('response stream, force destroy by initiator', async (t) => {
   req.send('foo')
 
   const reply = req.createResponseStream()
-  reply
-    .on('close', () => t.pass('stream closed'))
+  reply.on('close', () => t.pass('stream closed'))
 })
 
 test('response stream, force destroy by initiatee', async (t) => {
@@ -149,8 +146,7 @@ test('response stream, force destroy by initiatee', async (t) => {
 
     const reply = req.createResponseStream()
 
-    reply
-      .on('close', () => t.pass('stream closed'))
+    reply.on('close', () => t.pass('stream closed'))
   })
 
   const req = rpc.request('heartbeat')

@@ -9,7 +9,7 @@ const OutgoingRequest = require('./lib/outgoing-request')
 const OutgoingStream = require('./lib/outgoing-stream')
 
 module.exports = class RPC {
-  constructor (stream, onrequest) {
+  constructor(stream, onrequest) {
     this._stream = stream
 
     this._id = 0
@@ -22,20 +22,19 @@ module.exports = class RPC {
     this._onrequest = onrequest.bind(this)
     this._ondata = this._ondata.bind(this)
 
-    this._stream
-      .on('data', this._ondata)
+    this._stream.on('data', this._ondata)
   }
 
-  request (command) {
+  request(command) {
     return new OutgoingRequest(this, command)
   }
 
-  _sendMessage (message) {
+  _sendMessage(message) {
     this._stream.write(c.encode(m.message, message))
   }
 
-  _sendRequest (request, data = null) {
-    const id = request.id = ++this._id
+  _sendRequest(request, data = null) {
+    const id = (request.id = ++this._id)
 
     this._requests.set(id, request)
 
@@ -48,23 +47,33 @@ module.exports = class RPC {
     })
   }
 
-  _createRequestStream (request, isInitiator, opts) {
+  _createRequestStream(request, isInitiator, opts) {
     if (isInitiator) {
-      const id = request.id = ++this._id
+      const id = (request.id = ++this._id)
 
       this._requests.set(id, request)
 
-      request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
+      request._requestStream = new OutgoingStream(
+        this,
+        request,
+        t.REQUEST,
+        opts
+      )
     } else {
       this._incoming.set(request.id, request)
 
-      const stream = request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
+      const stream = (request._requestStream = new IncomingStream(
+        this,
+        request,
+        t.REQUEST,
+        opts
+      ))
 
       stream.on('close', () => this._incoming.delete(request.id))
     }
   }
 
-  _sendResponse (request, data) {
+  _sendResponse(request, data) {
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
@@ -74,21 +83,31 @@ module.exports = class RPC {
     })
   }
 
-  _createResponseStream (request, isInitiator, opts) {
+  _createResponseStream(request, isInitiator, opts) {
     if (isInitiator) {
       this._responses.set(request.id, request)
 
-      request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
+      request._responseStream = new OutgoingStream(
+        this,
+        request,
+        t.RESPONSE,
+        opts
+      )
     } else {
       this._incoming.set(request.id, request)
 
-      const stream = request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
+      const stream = (request._responseStream = new IncomingStream(
+        this,
+        request,
+        t.RESPONSE,
+        opts
+      ))
 
       stream.on('close', () => this._incoming.delete(request.id))
     }
   }
 
-  _sendError (request, err) {
+  _sendError(request, err) {
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
@@ -98,7 +117,7 @@ module.exports = class RPC {
     })
   }
 
-  _ondata (data) {
+  _ondata(data) {
     if (this._buffer === null) this._buffer = data
     else this._buffer = b4a.concat([this._buffer, data])
 
@@ -118,7 +137,12 @@ module.exports = class RPC {
 
       switch (message.type) {
         case t.REQUEST: {
-          const request = new IncomingRequest(this, message.id, message.command, message.data)
+          const request = new IncomingRequest(
+            this,
+            message.id,
+            message.command,
+            message.data
+          )
 
           try {
             this._onrequest(request)
@@ -144,11 +168,12 @@ module.exports = class RPC {
           }
       }
 
-      this._buffer = state.start === state.end ? null : this._buffer.subarray(state.start)
+      this._buffer =
+        state.start === state.end ? null : this._buffer.subarray(state.start)
     }
   }
 
-  _onresponse (message) {
+  _onresponse(message) {
     if (message.id === 0) return
 
     const request = this._requests.get(message.id)
@@ -161,7 +186,7 @@ module.exports = class RPC {
     }
   }
 
-  _onstream (message) {
+  _onstream(message) {
     if (message.id === 0) return
 
     if (message.stream & s.OPEN) this._onstreamopen(message)
@@ -173,7 +198,7 @@ module.exports = class RPC {
     else if (message.stream & s.DESTROY) this._onstreamdestroy(message)
   }
 
-  _onstreamopen (message) {
+  _onstreamopen(message) {
     let stream
 
     if (message.stream & s.REQUEST) {
@@ -193,7 +218,7 @@ module.exports = class RPC {
     stream._continueOpen()
   }
 
-  _onstreamclose (message) {
+  _onstreamclose(message) {
     const request = this._incoming.get(message.id)
     if (request === undefined) return
 
@@ -211,7 +236,7 @@ module.exports = class RPC {
     else stream.push(null)
   }
 
-  _onstreampause (message) {
+  _onstreampause(message) {
     let stream
 
     if (message.stream & s.REQUEST) {
@@ -231,7 +256,7 @@ module.exports = class RPC {
     stream.cork()
   }
 
-  _onstreamresume (message) {
+  _onstreamresume(message) {
     let stream
 
     if (message.stream & s.REQUEST) {
@@ -251,7 +276,7 @@ module.exports = class RPC {
     stream.uncork()
   }
 
-  _onstreamdata (message) {
+  _onstreamdata(message) {
     const request = this._incoming.get(message.id)
     if (request === undefined) return
 
@@ -276,7 +301,7 @@ module.exports = class RPC {
     }
   }
 
-  _onstreamend (message) {
+  _onstreamend(message) {
     const request = this._incoming.get(message.id)
     if (request === undefined) return
 
@@ -293,7 +318,7 @@ module.exports = class RPC {
     stream.push(null)
   }
 
-  _onstreamdestroy (message) {
+  _onstreamdestroy(message) {
     let stream
 
     if (message.stream & s.REQUEST) {
