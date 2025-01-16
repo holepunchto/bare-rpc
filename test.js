@@ -118,6 +118,39 @@ test('response stream', async (t) => {
     .on('end', () => t.pass('stream ended'))
 })
 
+test('request stream + response stream', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 'heartbeat', 'command is heartbeat')
+    t.alike(req.data, Buffer.from('1'), '1 received')
+
+    // createResponseStream
+    const reply = req.createResponseStream()
+    reply.write('2')
+
+    // createRequestStream
+    const stream = req.createRequestStream()
+    stream.on('data', (data) => {
+      t.alike(data, Buffer.from('3'), '3 received')
+      req.reply('4')
+    })
+  })
+
+  const req = rpc.request('heartbeat')
+  req.send('1')
+
+  // createResponseStream
+  const reply = req.createResponseStream()
+  reply.on('data', (data) => {
+    t.alike(data, Buffer.from('2'), '2 received')
+  })
+
+  // createRequestStream
+  const stream = req.createRequestStream()
+  stream.write('3')
+
+  t.alike(await req.reply(), Buffer.from('4'), '4 received')
+})
+
 test('response stream, force destroy by initiator', async (t) => {
   t.plan(3)
 
