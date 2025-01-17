@@ -156,3 +156,32 @@ test('response stream, force destroy by initiatee', async (t) => {
 
   setImmediate(() => reply.destroy())
 })
+
+test('request and response stream', async (t) => {
+  t.plan(4)
+
+  const rpc = new RPC(new PassThrough(), (req) => {
+    const reply = req.createResponseStream()
+    const stream = req.createRequestStream()
+
+    stream
+      .on('data', (data) => {
+        t.alike(data, Buffer.from('foo'))
+        reply.end('bar')
+      })
+      .on('close', () => t.pass('request stream closed'))
+  })
+
+  const req = rpc.request('heartbeat')
+
+  const reply = req.createResponseStream()
+  const stream = req.createRequestStream()
+
+  stream.end('foo')
+
+  reply
+    .on('data', (data) => {
+      t.alike(data, Buffer.from('bar'))
+    })
+    .on('close', () => t.pass('response stream closed'))
+})
