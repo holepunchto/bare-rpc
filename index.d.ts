@@ -24,11 +24,11 @@ declare const constants: {
 }
 
 interface RPCIncomingRequest {
-  rpc: RPC
-  id: number
-  command: string
-  data: Buffer
-  sent: boolean
+  readonly rpc: RPC
+  readonly id: number
+  readonly command: string
+  readonly data: Buffer
+  readonly sent: boolean
 
   reply(data: Buffer | string, encoding?: BufferEncoding): void
 
@@ -41,6 +41,11 @@ declare class RPCIncomingRequest {
 }
 
 interface RPCOutgoingRequest {
+  readonly rpc: RPC
+  readonly id: number
+  readonly command: string
+  readonly sent: boolean
+
   send(data: Buffer | string, encoding?: BufferEncoding): void
 
   reply(encoding?: BufferEncoding): Promise<Buffer>

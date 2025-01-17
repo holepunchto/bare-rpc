@@ -30,7 +30,7 @@ module.exports = class RPC {
   }
 
   request(command) {
-    return new OutgoingRequest(++this._id, this, command)
+    return new OutgoingRequest(this, ++this._id, command)
   }
 
   _sendMessage(message) {
