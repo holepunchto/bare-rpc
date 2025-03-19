@@ -4,7 +4,7 @@ import {
   ReadableOptions,
   Writable,
   WritableOptions,
-  PassThrough
+  Duplex
 } from 'bare-stream'
 
 declare const constants: {
@@ -81,7 +81,7 @@ interface RPC {
 }
 
 declare class RPC {
-  constructor(stream: PassThrough, onrequest: (req: RPCIncomingRequest) => void)
+  constructor(stream: Duplex, onrequest: (req: RPCIncomingRequest) => void)
 }
 
 export = RPC
