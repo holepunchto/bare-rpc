@@ -26,7 +26,7 @@ declare const constants: {
 interface RPCIncomingRequest {
   readonly rpc: RPC
   readonly id: number
-  readonly command: string
+  readonly command: number
   readonly data: Buffer
   readonly sent: boolean
   readonly received: boolean
@@ -38,13 +38,13 @@ interface RPCIncomingRequest {
 }
 
 declare class RPCIncomingRequest {
-  constructor(rpc: RPC, id: number, command: string, data: Buffer)
+  constructor(rpc: RPC, id: number, command: number, data: Buffer)
 }
 
 interface RPCOutgoingRequest {
   readonly rpc: RPC
   readonly id: number
-  readonly command: string
+  readonly command: number
   readonly sent: boolean
   readonly received: boolean
 
@@ -57,7 +57,7 @@ interface RPCOutgoingRequest {
 }
 
 declare class RPCOutgoingRequest {
-  constructor(rpc: RPC, command: string)
+  constructor(rpc: RPC, command: number)
 }
 
 declare class RPCIncomingStream extends Readable {
@@ -79,7 +79,7 @@ declare class RPCOutgoingStream extends Writable {
 }
 
 interface RPC {
-  request(command: string): RPCOutgoingRequest
+  request(command: number): RPCOutgoingRequest
 }
 
 declare class RPC {
