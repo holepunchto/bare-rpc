@@ -7,8 +7,9 @@ const IncomingRequest = require('./lib/incoming-request')
 const IncomingStream = require('./lib/incoming-stream')
 const OutgoingRequest = require('./lib/outgoing-request')
 const OutgoingStream = require('./lib/outgoing-stream')
+const CommandRouter = require('./lib/command-router')
 
-module.exports = class RPC {
+module.exports = exports = class RPC {
   constructor(stream, onrequest) {
     this._stream = stream
 
@@ -23,7 +24,13 @@ module.exports = class RPC {
 
     this._buffer = null
 
-    this._onrequest = onrequest.bind(this)
+    if (typeof onrequest === 'function') {
+      onrequest = onrequest.bind(this)
+    } else {
+      onrequest = onrequest._onrequest.bind(onrequest)
+    }
+
+    this._onrequest = onrequest
     this._ondata = this._ondata.bind(this)
 
     this._stream.on('data', this._ondata)
@@ -357,3 +364,5 @@ module.exports = class RPC {
     stream.destroy(message.error)
   }
 }
+
+exports.CommandRouter = CommandRouter

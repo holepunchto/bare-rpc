@@ -185,3 +185,22 @@ test('request and response stream', async (t) => {
     })
     .on('close', () => t.pass('response stream closed'))
 })
+
+test('command router', async (t) => {
+  t.plan(2)
+
+  const router = new RPC.CommandRouter()
+
+  router.respond('ping', (req, data) => {
+    t.alike(data, Buffer.from('ping'))
+
+    return Buffer.from('pong')
+  })
+
+  const rpc = new RPC(new PassThrough(), router)
+
+  const req = rpc.request('ping')
+  req.send('ping')
+
+  t.alike(await req.reply(), Buffer.from('pong'))
+})

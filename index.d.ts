@@ -29,6 +29,7 @@ interface RPCIncomingRequest {
   readonly command: string
   readonly data: Buffer
   readonly sent: boolean
+  readonly received: boolean
 
   reply(data: Buffer | string, encoding?: BufferEncoding): void
 
@@ -45,6 +46,7 @@ interface RPCOutgoingRequest {
   readonly id: number
   readonly command: string
   readonly sent: boolean
+  readonly received: boolean
 
   send(data: Buffer | string, encoding?: BufferEncoding): void
 
