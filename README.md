@@ -135,7 +135,7 @@ const req = rpc.request(42)
 req.send('ping')
 ```
 
-#### `router.respond(command, [opts = {}], async (req, data) => {})`
+#### `router.respond(command, [opts], async (req, data) => {})`
 
 Define a command and the handler for it. The callback for a command receives both the request (`req`) and the `data` buffer and can return a value to respond. If the request is responded to in the callback, the return value is ignored.
 
