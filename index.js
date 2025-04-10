@@ -154,19 +154,19 @@ module.exports = exports = class RPC {
   }
 
   _onafterframe() {
-    while (this._frame >= 0 && this._frame <= this._buffered) {
-      const buffer =
-        this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
+    if (this._frame === -1 || this._buffered < this._frame) return
 
-      const frame = this._frame
+    const buffer =
+      this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
-      this._buffered -= frame
-      this._buffer = this._buffered > 0 ? [buffer.subarray(frame)] : []
-      this._frame = -1
+    const frame = this._frame
 
-      this._onmessage(buffer.subarray(0, frame))
-      this._onbeforeframe()
-    }
+    this._buffered -= frame
+    this._buffer = this._buffered > 0 ? [buffer.subarray(frame)] : []
+    this._frame = -1
+
+    this._onmessage(buffer.subarray(0, frame))
+    this._onbeforeframe()
   }
 
   _onmessage(buffer) {
