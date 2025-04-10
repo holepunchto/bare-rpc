@@ -143,8 +143,8 @@ Define a command and the handler for it. The callback for a command receives bot
 
 ```
 {
-  requestEncoding = c.raw, // Encoding for decoding incoming request
-  responseEncoding = c.raw, // Encoding for outgoing response
+  requestEncoding: c.raw, // Encoding for decoding incoming request
+  responseEncoding: c.raw, // Encoding for outgoing response
 }
 ```
 
