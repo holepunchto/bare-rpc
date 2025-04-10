@@ -154,7 +154,7 @@ module.exports = exports = class RPC {
   }
 
   _onafterframe() {
-    if (this._frame === -1 || this._buffered < this._frame) return
+    if (this._buffered < this._frame) return
 
     const buffer =
       this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
