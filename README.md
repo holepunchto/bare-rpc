@@ -44,6 +44,8 @@ const rpc = new RPC(stream, (req) => {
 
 See [`RPCIncomingRequest`](#rpcincomingrequest) for properties and methods for processing the request.
 
+`onrequest` can also be a [`RPCCommandRouter`](#rpccommandrouter).
+
 #### `const req = rpc.request(command)`
 
 Create a request for `command`. `command` is a unique number that should be used to differentiate different requests on the remote end. Returns a `RPCOutgoingRequest`.
@@ -109,6 +111,42 @@ Create a `Readable` stream for receiving data from the request.
 #### `const stream = req.createResponseStream([opts])`
 
 Create a `Writable` stream for sending data in reply to the request.
+
+### `RPCCommandRouter`
+
+An alternative way to define commands and handlers for receiving them.
+
+#### `const router = new RPC.CommandRouter()`
+
+Create a new command router. This router can then be used when creating an
+`rpc`. For example:
+
+```js
+const router = new RPC.CommandRouter()
+
+router.respond(42, (req, data) => {
+  console.log(data.toString()) // ping
+
+  return Buffer.from('pong')
+})
+
+const rpc = new RPC(stream, router)
+const req = rpc.request(42)
+req.send('ping')
+```
+
+#### `router.respond(command, [opts = {}], async (req, data) => {})`
+
+Define a command and the handler for it. The callback for a command receives both the request (`req`) and the `data` buffer and can return a value to respond. If the request is responded to in the callback, the return value is ignored.
+
+`opts` can include:
+
+```
+{
+  requestEncoding = c.raw, // Encoding for decoding incoming request
+  responseEncoding = c.raw, // Encoding for outgoing response
+}
+```
 
 ## License
 
