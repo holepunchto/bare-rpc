@@ -22,7 +22,9 @@ module.exports = exports = class RPC {
     this._pendingRequests = new Set()
     this._pendingResponses = new Set()
 
-    this._buffer = null
+    this._buffer = []
+    this._buffered = 0
+    this._frame = -1
 
     if (typeof onrequest === 'function') {
       onrequest = onrequest.bind(this)
@@ -129,58 +131,84 @@ module.exports = exports = class RPC {
   }
 
   _ondata(data) {
-    if (this._buffer === null) this._buffer = data
-    else this._buffer = b4a.concat([this._buffer, data])
+    this._buffer.push(data)
+    this._buffered += data.byteLength
 
-    while (this._buffer !== null) {
-      const state = { start: 0, end: this._buffer.length, buffer: this._buffer }
+    if (this._frame === -1) {
+      this._onbeforeframe()
+    } else {
+      this._onafterframe()
+    }
+  }
 
-      let message
-      try {
-        message = m.message.decode(state)
-      } catch (err) {
-        safetyCatch(err)
+  _onbeforeframe() {
+    if (this._buffered < 4) return
 
-        return this._stream.destroy(err)
-      }
+    const buffer =
+      this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
-      if (message === null) return
+    this._buffer = [buffer]
+    this._frame = 4 + c.uint32.decode(c.state(0, 4, buffer))
 
-      switch (message.type) {
-        case t.REQUEST: {
-          const request = new IncomingRequest(
-            this,
-            message.id,
-            message.command,
-            message.data
-          )
+    this._onafterframe()
+  }
 
-          try {
-            this._onrequest(request)
-          } catch (err) {
-            safetyCatch(err)
+  _onafterframe() {
+    while (this._frame >= 0 && this._frame <= this._buffered) {
+      const buffer =
+        this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
-            this._sendError(request, err)
-          }
-          break
+      const frame = this._frame
+
+      this._buffered -= frame
+      this._buffer = this._buffered > 0 ? [buffer.subarray(frame)] : []
+      this._frame = -1
+
+      this._onmessage(buffer.subarray(0, frame))
+      this._onbeforeframe()
+    }
+  }
+
+  _onmessage(buffer) {
+    let message
+    try {
+      message = m.message.decode(c.state(0, buffer.length, buffer))
+    } catch (err) {
+      safetyCatch(err)
+
+      return this._stream.destroy(err)
+    }
+
+    switch (message.type) {
+      case t.REQUEST:
+        const request = new IncomingRequest(
+          this,
+          message.id,
+          message.command,
+          message.data
+        )
+
+        try {
+          this._onrequest(request)
+        } catch (err) {
+          safetyCatch(err)
+
+          this._sendError(request, err)
         }
-        case t.RESPONSE:
-          try {
-            this._onresponse(message)
-          } catch (err) {
-            safetyCatch(err)
-          }
-          break
-        case t.STREAM:
-          try {
-            this._onstream(message)
-          } catch (err) {
-            safetyCatch(err)
-          }
-      }
-
-      this._buffer =
-        state.start === state.end ? null : this._buffer.subarray(state.start)
+        break
+      case t.RESPONSE:
+        try {
+          this._onresponse(message)
+        } catch (err) {
+          safetyCatch(err)
+        }
+        break
+      case t.STREAM:
+        try {
+          this._onstream(message)
+        } catch (err) {
+          safetyCatch(err)
+        }
     }
   }
 
