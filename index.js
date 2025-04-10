@@ -169,7 +169,7 @@ module.exports = exports = class RPC {
     this._onbeforeframe()
   }
 
-  _onmessage(buffer) {
+  async _onmessage(buffer) {
     let message
     try {
       message = m.message.decode(c.state(0, buffer.length, buffer))
@@ -189,7 +189,7 @@ module.exports = exports = class RPC {
         )
 
         try {
-          this._onrequest(request)
+          await this._onrequest(request)
         } catch (err) {
           safetyCatch(err)
 

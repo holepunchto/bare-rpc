@@ -204,3 +204,25 @@ test('command router', async (t) => {
 
   t.alike(await req.reply(), Buffer.from('pong'))
 })
+
+test('throw in request handler', async (t) => {
+  const rpc = new RPC(new PassThrough(), () => {
+    throw new Error('Nope')
+  })
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  await t.exception(req.reply(), /Nope/)
+})
+
+test('throw in async request handler', async (t) => {
+  const rpc = new RPC(new PassThrough(), async () => {
+    throw new Error('Nope')
+  })
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  await t.exception(req.reply(), /Nope/)
+})
