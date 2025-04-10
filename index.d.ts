@@ -50,7 +50,7 @@ interface RPCOutgoingRequest {
 
   send(data: Buffer | string, encoding?: BufferEncoding): void
 
-  reply(encoding?: BufferEncoding): Promise<Buffer>
+  reply(encoding?: BufferEncoding): Promise<Buffer | string>
 
   createRequestStream(opts?: WritableOptions): RPCOutgoingStream
   createResponseStream(opts?: ReadableOptions): RPCIncomingStream
