@@ -1,5 +1,6 @@
 const test = require('brittle')
 const { PassThrough } = require('bare-stream')
+const IPC = require('bare-ipc')
 const RPC = require('.')
 
 test('basic', async (t) => {
@@ -225,4 +226,96 @@ test('throw in async request handler', async (t) => {
   req.send('ping')
 
   await t.exception(req.reply(), /Nope/)
+})
+
+test('request and reply, ipc', async (t) => {
+  const ports = IPC.open()
+
+  const a = ports[0].connect()
+  t.teardown(() => a.destroy())
+
+  const b = ports[1].connect()
+  t.teardown(() => b.destroy())
+
+  new RPC(a, async (req) => {
+    t.is(req.command, 42)
+    t.alike(req.data, Buffer.from('ping'))
+
+    req.reply('pong')
+  })
+
+  const rpc = new RPC(b, () => {})
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  t.alike(await req.reply(), Buffer.from('pong'))
+})
+
+test('request stream, ipc', async (t) => {
+  t.plan(4)
+
+  const ports = IPC.open()
+
+  const a = ports[0].connect()
+  a.id = 'a'
+  t.teardown(() => a.destroy())
+
+  const b = ports[1].connect()
+  b.id = 'b'
+  t.teardown(() => b.destroy())
+
+  new RPC(a, (req) => {
+    t.is(req.command, 42)
+
+    const stream = req.createRequestStream()
+    stream
+      .on('data', (data) => t.alike(data, Buffer.from('foo')))
+      .on('end', () => {
+        t.pass('stream ended')
+
+        req.reply('bar')
+      })
+  })
+
+  const rpc = new RPC(b, () => {})
+
+  const req = rpc.request(42)
+
+  const stream = req.createRequestStream()
+  stream.end('foo')
+
+  t.alike(await req.reply(), Buffer.from('bar'))
+})
+
+test('response stream, ipc', async (t) => {
+  t.plan(4)
+
+  const ports = IPC.open()
+
+  const a = ports[0].connect()
+  a.id = 'a'
+  t.teardown(() => a.destroy())
+
+  const b = ports[1].connect()
+  b.id = 'b'
+  t.teardown(() => b.destroy())
+
+  new RPC(a, async (req) => {
+    t.is(req.command, 42)
+    t.alike(req.data, Buffer.from('foo'))
+
+    const reply = req.createResponseStream()
+    reply.end('bar')
+  })
+
+  const rpc = new RPC(b, () => {})
+
+  const req = rpc.request(42)
+  req.send('foo')
+
+  const reply = req.createResponseStream()
+  reply
+    .on('data', (data) => t.alike(data, Buffer.from('bar')))
+    .on('end', () => t.pass('stream ended'))
 })

@@ -248,6 +248,11 @@ module.exports = exports = class RPC {
       }
 
       stream = request._requestStream
+
+      if (stream._pendingOpen === null) {
+        this._pendingRequests.add(message.id)
+        return
+      }
     } else if (message.stream & s.RESPONSE) {
       const request = this._outgoingResponses.get(message.id)
       if (request === undefined) {
@@ -256,6 +261,11 @@ module.exports = exports = class RPC {
       }
 
       stream = request._responseStream
+
+      if (stream._pendingOpen === null) {
+        this._pendingResponses.add(message.id)
+        return
+      }
     } else {
       return
     }
