@@ -10,7 +10,7 @@ const OutgoingStream = require('./lib/outgoing-stream')
 const CommandRouter = require('./lib/command-router')
 
 module.exports = exports = class RPC {
-  constructor(stream, onrequest) {
+  constructor(stream, onrequest = noop) {
     this._stream = stream
 
     this._id = 0
@@ -404,3 +404,5 @@ module.exports = exports = class RPC {
 }
 
 exports.CommandRouter = CommandRouter
+
+function noop() {}
