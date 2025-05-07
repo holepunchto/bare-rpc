@@ -319,3 +319,27 @@ test('response stream, ipc', async (t) => {
     .on('data', (data) => t.alike(data, Buffer.from('bar')))
     .on('end', () => t.pass('stream ended'))
 })
+
+test('large request and reply, ipc', async (t) => {
+  const ports = IPC.open()
+
+  const a = ports[0].connect()
+  t.teardown(() => a.destroy())
+
+  const b = ports[1].connect()
+  t.teardown(() => b.destroy())
+
+  new RPC(a, async (req) => {
+    t.is(req.command, 42)
+    t.alike(req.data, Buffer.alloc(4 * 1024 * 1024, 'ping'))
+
+    req.reply(Buffer.alloc(4 * 1024 * 1024, 'pong'))
+  })
+
+  const rpc = new RPC(b, () => {})
+
+  const req = rpc.request(42)
+  req.send(Buffer.alloc(4 * 1024 * 1024, 'ping'))
+
+  t.alike(await req.reply(), Buffer.alloc(4 * 1024 * 1024, 'pong'))
+})
