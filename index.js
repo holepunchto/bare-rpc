@@ -12,7 +12,6 @@ const CommandRouter = require('./lib/command-router')
 module.exports = exports = class RPC {
   constructor(stream, onrequest = noop) {
     this._stream = stream
-
     this._id = 0
 
     this._outgoingRequests = new Map()
