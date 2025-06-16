@@ -11,6 +11,7 @@ npm i bare-rpc
 ```js
 import RPC from 'bare-rpc'
 
+// On one end
 const rpc = new RPC(stream, (req) => {
   if (req.command === 42) {
     console.log(req.data.toString()) // ping
@@ -30,7 +31,7 @@ console.log(replyBuffer.toString()) // pong
 
 ### `RPC`
 
-#### `const rpc = new RPC(stream, [onrequest])`
+#### `const rpc = new RPC(stream[, onrequest])`
 
 Create an RPC instance using a duplex `stream`. `onrequest` is an optional callback run when a remote request is received. This is where processing and responding to an RPC request happens. `onrequest` receives a `RPCIncomingRequest` as an argument, for example:
 
@@ -64,7 +65,7 @@ A boolean for whether the request has been sent.
 
 A boolean for whether the request has received a reply.
 
-#### `req.send(data, [encoding])`
+#### `req.send(data[, encoding])`
 
 Send the request with the provided `data`. `data` can be a buffer or a string which will be encoded using `encoding`.
 
@@ -74,13 +75,13 @@ Send the request with the provided `data`. `data` can be a buffer or a string wh
 
 Await the reply from the remote end to the request. `encoding` can be defined for decoding the response `data` buffer back into a string.
 
-#### `const stream = req.createRequestStream([opts])`
+#### `const stream = req.createRequestStream([options])`
 
-Create a [`Writable`](https://github.com/mafintosh/streamx?tab=readme-ov-file#writable-stream) stream for sending data with the request.
+Create a [`Writable`](https://github.com/mafintosh/streamx#writable-stream) stream for sending data with the request.
 
-#### `const stream = req.createResponseStream([opts])`
+#### `const stream = req.createResponseStream([options])`
 
-Create a [`Readable`](https://github.com/mafintosh/streamx?tab=readme-ov-file#readable-stream) stream for receiving data in reply to the request.
+Create a [`Readable`](https://github.com/mafintosh/streamx#readable-stream) stream for receiving data in reply to the request.
 
 ### `RPCIncomingRequest`
 
@@ -104,11 +105,11 @@ A boolean for whether the request has been received as a stream. See [`req.creat
 
 Reply to the request with the provided `data`. `data` can be a buffer or a string which will be encoded using `encoding`.
 
-#### `const stream = req.createRequestStream([opts])`
+#### `const stream = req.createRequestStream([options])`
 
 Create a `Readable` stream for receiving data from the request.
 
-#### `const stream = req.createResponseStream([opts])`
+#### `const stream = req.createResponseStream([options])`
 
 Create a `Writable` stream for sending data in reply to the request.
 
@@ -118,8 +119,7 @@ An alternative way to define commands and handlers for receiving them.
 
 #### `const router = new RPC.CommandRouter()`
 
-Create a new command router. This router can then be used when creating an
-`rpc`. For example:
+Create a new command router. This router can then be used when creating an `rpc`. For example:
 
 ```js
 const router = new RPC.CommandRouter()
@@ -135,16 +135,18 @@ const req = rpc.request(42)
 req.send('ping')
 ```
 
-#### `router.respond(command, [opts], async (req, data) => {})`
+#### `router.respond(command[, options], async (req, data) => {})`
 
 Define a command and the handler for it. The callback for a command receives both the request (`req`) and the `data` buffer and can return a value to respond. If the request is responded to in the callback, the return value is ignored.
 
-`opts` can include:
+Options include:
 
 ```
 {
-  requestEncoding: c.raw, // Encoding for decoding incoming request
-  responseEncoding: c.raw, // Encoding for outgoing response
+  // Encoding for incoming request
+  requestEncoding: c.raw,
+  // Encoding for outgoing response
+  responseEncoding: c.raw,
 }
 ```
 
