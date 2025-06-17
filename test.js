@@ -1,4 +1,5 @@
 const test = require('brittle')
+const c = require('compact-encoding')
 const { PassThrough } = require('bare-stream')
 const IPC = require('bare-ipc')
 const RPC = require('.')
@@ -17,7 +18,7 @@ test('basic', async (t) => {
   t.alike(await req.reply(), Buffer.from('pong'))
 })
 
-test('reply encoding', async (t) => {
+test('string encoding', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
     t.is(req.command, 42)
     t.alike(req.data, Buffer.from('ping'))
@@ -29,6 +30,20 @@ test('reply encoding', async (t) => {
   req.send('cGluZw==', 'base64')
 
   t.alike(await req.reply('utf8'), 'pong')
+})
+
+test('compact encoding', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 42)
+    t.alike(c.decode(c.any, req.data), { hello: 'world' })
+
+    req.reply(['hello', 'world'], c.any)
+  })
+
+  const req = rpc.request(42)
+  req.send({ hello: 'world' }, c.any)
+
+  t.alike(await req.reply(c.any), ['hello', 'world'])
 })
 
 test('request stream', async (t) => {
