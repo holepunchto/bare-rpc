@@ -43,6 +43,8 @@ module.exports = exports = class RPC {
 
   _sendMessage(message) {
     this._stream.write(c.encode(m.message, message))
+
+    if (message.data) this._stream.write(message.data)
   }
 
   _sendRequest(request, data = null) {
