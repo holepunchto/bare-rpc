@@ -65,7 +65,7 @@ A boolean for whether the request has been sent.
 
 A boolean for whether the request has received a reply.
 
-#### `req.send(data[, encoding])`
+#### `req.send([data[, encoding]])`
 
 Send the request with the provided `data`. `data` can be a buffer or a string which will be encoded using `encoding`.
 
@@ -101,7 +101,7 @@ A boolean for whether a reply has been sent.
 
 A boolean for whether the request has been received as a stream. See [`req.createRequestStream()`](#const-stream--reqcreaterequeststream) for receiving requests as a stream.
 
-#### `req.reply(data, [encoding])`
+#### `req.reply([data, [encoding]])`
 
 Reply to the request with the provided `data`. `data` can be a buffer or a string which will be encoded using `encoding`.
 
