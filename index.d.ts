@@ -27,11 +27,11 @@ interface RPCIncomingRequest {
   readonly rpc: RPC
   readonly id: number
   readonly command: number
-  readonly data: Buffer
+  readonly data: Buffer | null
   readonly sent: boolean
   readonly received: boolean
 
-  reply(data: Buffer | string, encoding?: BufferEncoding): void
+  reply(data?: Buffer | string | null, encoding?: BufferEncoding): void
 
   createResponseStream(opts?: WritableOptions): RPCOutgoingStream
   createRequestStream(opts?: ReadableOptions): RPCIncomingStream
@@ -48,9 +48,9 @@ interface RPCOutgoingRequest {
   readonly sent: boolean
   readonly received: boolean
 
-  send(data: Buffer | string, encoding?: BufferEncoding): void
+  send(data?: Buffer | string | null, encoding?: BufferEncoding): void
 
-  reply(encoding?: BufferEncoding): Promise<Buffer | string>
+  reply(encoding?: BufferEncoding): Promise<Buffer | string | null>
 
   createRequestStream(opts?: WritableOptions): RPCOutgoingStream
   createResponseStream(opts?: ReadableOptions): RPCIncomingStream

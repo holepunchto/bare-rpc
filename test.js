@@ -32,6 +32,34 @@ test('string encoding', async (t) => {
   t.alike(await req.reply('utf8'), 'pong')
 })
 
+test('empty request', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 42)
+    t.is(req.data, null)
+
+    req.reply('pong')
+  })
+
+  const req = rpc.request(42)
+  req.send()
+
+  t.alike(await req.reply(), Buffer.from('pong'))
+})
+
+test('empty response', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 42)
+    t.alike(req.data, Buffer.from('ping'))
+
+    req.reply()
+  })
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  t.alike(await req.reply(), null)
+})
+
 test('compact encoding', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
     t.is(req.command, 42)
