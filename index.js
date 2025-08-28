@@ -42,7 +42,11 @@ module.exports = exports = class RPC {
   }
 
   _sendMessage(message) {
-    this._stream.write(c.encode(m.message, message))
+    const header = c.encode(m.header, message)
+
+    this._stream.write(header)
+
+    if (message.data) this._stream.write(message.data)
   }
 
   _sendRequest(request, data = null) {
