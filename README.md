@@ -142,11 +142,11 @@ Define a command and the handler for it. The callback for a command receives bot
 Options include:
 
 ```js
-{
+options = {
   // Encoding for incoming request
   requestEncoding: c.raw,
   // Encoding for outgoing response
-  responseEncoding: c.raw,
+  responseEncoding: c.raw
 }
 ```
 
