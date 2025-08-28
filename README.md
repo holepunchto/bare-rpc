@@ -141,7 +141,7 @@ Define a command and the handler for it. The callback for a command receives bot
 
 Options include:
 
-```
+```js
 {
   // Encoding for incoming request
   requestEncoding: c.raw,
