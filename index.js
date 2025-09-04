@@ -24,6 +24,7 @@ module.exports = exports = class RPC {
     this._buffer = []
     this._buffered = 0
     this._frame = -1
+    this._draining = []
 
     if (typeof onrequest === 'function') {
       onrequest = onrequest.bind(this)
@@ -33,20 +34,29 @@ module.exports = exports = class RPC {
 
     this._onrequest = onrequest
     this._ondata = this._ondata.bind(this)
+    this._ondrain = this._ondrain.bind(this)
 
-    this._stream.on('data', this._ondata)
+    this._stream
+      .on('error', this._onerror)
+      .on('data', this._ondata)
+      .on('drain', this._ondrain)
   }
 
   request(command) {
     return new OutgoingRequest(this, ++this._id, command)
   }
 
-  _sendMessage(message) {
+  _sendMessage(message, cb) {
     const header = c.encode(m.header, message)
 
-    this._stream.write(header)
+    let flushed = this._stream.write(header)
 
-    if (message.data) this._stream.write(message.data)
+    if (message.data) flushed = this._stream.write(message.data)
+
+    if (cb) {
+      if (flushed) cb(null)
+      else this._draining.push(cb)
+    }
   }
 
   _sendRequest(request, data = null) {
@@ -131,6 +141,12 @@ module.exports = exports = class RPC {
       error: err,
       data: null
     })
+  }
+
+  _onerror(err) {
+    this._ondrain(err)
+
+    // TODO Destroy pending requests and responses
   }
 
   _ondata(data) {
@@ -403,6 +419,14 @@ module.exports = exports = class RPC {
     }
 
     stream.destroy(message.error)
+  }
+
+  _ondrain(err = null) {
+    const draining = this._draining
+
+    this._draining = []
+
+    for (const cb of draining) cb(err)
   }
 }
 
