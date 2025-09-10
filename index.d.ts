@@ -89,4 +89,13 @@ declare class RPC {
   )
 }
 
+declare namespace RPC {
+  export {
+    type RPCIncomingRequest as IncomingRequest,
+    type RPCOutgoingRequest as OutgoingRequest,
+    type RPCIncomingStream as IncomingStream,
+    type RPCOutgoingStream as OutgoingStream
+  }
+}
+
 export = RPC
