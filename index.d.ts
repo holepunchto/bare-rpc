@@ -83,7 +83,10 @@ interface RPC {
 }
 
 declare class RPC {
-  constructor(stream: Duplex, onrequest: (req: RPCIncomingRequest) => void)
+  constructor(
+    stream: Duplex,
+    onrequest: (req: RPCIncomingRequest) => void | Promise<void>
+  )
 }
 
 export = RPC
