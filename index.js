@@ -33,6 +33,7 @@ module.exports = exports = class RPC {
     }
 
     this._onrequest = onrequest
+    this._onerror = this._onerror.bind(this)
     this._ondata = this._ondata.bind(this)
     this._ondrain = this._ondrain.bind(this)
 
