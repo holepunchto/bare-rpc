@@ -284,6 +284,19 @@ test('throw an error with number code', async (t) => {
   await t.exception(req.reply(), /Nope/)
 })
 
+test('throw an error with string errno', async (t) => {
+  const error = new Error('Nope')
+  error.errno = '21'
+  const rpc = new RPC(new PassThrough(), () => {
+    throw error
+  })
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  await t.exception(req.reply(), /Nope/)
+})
+
 test('request and reply, ipc', async (t) => {
   const ports = IPC.open()
 
