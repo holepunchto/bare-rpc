@@ -459,7 +459,11 @@ test('request and reply stream backpressure, ipc', async (t) => {
   new RPC(a, async (req) => {
     t.is(req.command, 42)
 
-    req.createRequestStream().pipe(req.createResponseStream())
+    const stream = req.createRequestStream()
+
+    setTimeout(() => {
+      stream.pipe(req.createResponseStream())
+    }, 100)
   })
 
   const rpc = new RPC(b, () => {})
