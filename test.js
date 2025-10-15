@@ -444,3 +444,48 @@ test('large request and reply stream, ipc', async (t) => {
     t.alike(data, Buffer.alloc(4 * 1024 * 1024, 'ping'))
   })
 })
+
+test('request and reply stream backpressure, ipc', async (t) => {
+  t.plan(3)
+
+  const ports = IPC.open()
+
+  const a = ports[0].connect()
+  t.teardown(() => a.destroy())
+
+  const b = ports[1].connect()
+  t.teardown(() => b.destroy())
+
+  new RPC(a, async (req) => {
+    t.is(req.command, 42)
+
+    req.createRequestStream().pipe(req.createResponseStream())
+  })
+
+  const rpc = new RPC(b, () => {})
+
+  const req = rpc.request(42)
+
+  const stream = req.createRequestStream()
+
+  const sent = []
+  const received = []
+
+  let backpressured
+
+  for (let i = 0; i < 10000; i++) {
+    const data = Buffer.from(`${i}`)
+    sent.push(data)
+    backpressured = stream.write(data) === false
+  }
+
+  stream.end()
+
+  t.ok(backpressured)
+
+  const reply = req.createResponseStream()
+
+  reply
+    .on('data', (data) => received.push(data))
+    .on('end', () => t.alike(sent, received))
+})
