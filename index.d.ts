@@ -23,6 +23,16 @@ declare const constants: {
   }
 }
 
+interface RPCIncomingEvent {
+  readonly rpc: RPC
+  readonly command: number
+  readonly data: Buffer | null
+}
+
+declare class RPCIncomingEvent {
+  constructor(rpc: RPC, command: number, data: Buffer)
+}
+
 interface RPCIncomingRequest {
   readonly rpc: RPC
   readonly id: number
@@ -41,6 +51,18 @@ declare class RPCIncomingRequest {
   constructor(rpc: RPC, id: number, command: number, data: Buffer)
 }
 
+interface RPCOutgoingEvent {
+  readonly rpc: RPC
+  readonly command: number
+  readonly sent: boolean
+
+  send(data?: Buffer | string | null, encoding?: BufferEncoding): void
+}
+
+declare class RPCOutgoingEvent {
+  constructor(rpc: RPC, command: number)
+}
+
 interface RPCOutgoingRequest {
   readonly rpc: RPC
   readonly id: number
@@ -57,7 +79,7 @@ interface RPCOutgoingRequest {
 }
 
 declare class RPCOutgoingRequest {
-  constructor(rpc: RPC, command: number)
+  constructor(rpc: RPC, id: number, command: number)
 }
 
 declare class RPCIncomingStream extends Readable {
@@ -79,6 +101,7 @@ declare class RPCOutgoingStream extends Writable {
 }
 
 interface RPC {
+  event(command: number): RPCOutgoingEvent
   request(command: number): RPCOutgoingRequest
 }
 
@@ -91,6 +114,8 @@ declare class RPC {
 
 declare namespace RPC {
   export {
+    type RPCIncomingEvent as IncomingEvent,
+    type RPCOutgoingEvent as OutgoingEvent,
     type RPCIncomingRequest as IncomingRequest,
     type RPCOutgoingRequest as OutgoingRequest,
     type RPCIncomingStream as IncomingStream,
