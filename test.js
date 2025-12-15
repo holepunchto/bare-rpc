@@ -493,3 +493,29 @@ test('request and reply stream backpressure, ipc', async (t) => {
     .on('data', (data) => received.push(data))
     .on('end', () => t.alike(sent, received))
 })
+
+test('event', async (t) => {
+  t.plan(2)
+
+  const rpc = new RPC(new PassThrough(), (req) => {
+    t.is(req.command, 42)
+    t.alike(req.data, Buffer.from('ping'))
+  })
+
+  const req = rpc.event(42)
+  req.send('ping')
+})
+
+test('throw in event request handler', async (t) => {
+  t.plan(1)
+
+  const rpc = new RPC(
+    new PassThrough().on('error', (err) => t.is(err.message, 'Nope')),
+    () => {
+      throw new Error('Nope')
+    }
+  )
+
+  const req = rpc.event(42)
+  req.send('ping')
+})

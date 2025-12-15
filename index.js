@@ -3,8 +3,10 @@ const b4a = require('b4a')
 const c = require('compact-encoding')
 const m = require('./lib/messages')
 const { type: t, stream: s } = require('./lib/constants')
+const IncomingEvent = require('./lib/incoming-event')
 const IncomingRequest = require('./lib/incoming-request')
 const IncomingStream = require('./lib/incoming-stream')
+const OutgoingEvent = require('./lib/outgoing-event')
 const OutgoingRequest = require('./lib/outgoing-request')
 const OutgoingStream = require('./lib/outgoing-stream')
 const CommandRouter = require('./lib/command-router')
@@ -43,6 +45,10 @@ module.exports = exports = class RPC {
       .on('drain', this._ondrain)
   }
 
+  event(command) {
+    return new OutgoingEvent(this, command)
+  }
+
   request(command) {
     return new OutgoingRequest(this, ++this._id, command)
   }
@@ -58,6 +64,16 @@ module.exports = exports = class RPC {
       if (flushed) cb(null)
       else this._draining.push(cb)
     }
+  }
+
+  _sendEvent(request, data = null) {
+    this._sendMessage({
+      type: t.REQUEST,
+      id: 0,
+      command: request.command,
+      stream: 0,
+      data
+    })
   }
 
   _sendRequest(request, data = null) {
@@ -201,19 +217,23 @@ module.exports = exports = class RPC {
 
     switch (message.type) {
       case t.REQUEST:
-        const request = new IncomingRequest(
-          this,
-          message.id,
-          message.command,
-          message.data
-        )
+        const request =
+          message.id === 0
+            ? new IncomingEvent(this, message.command, message.data)
+            : new IncomingRequest(
+                this,
+                message.id,
+                message.command,
+                message.data
+              )
 
         try {
           await this._onrequest(request)
         } catch (err) {
           safetyCatch(err)
 
-          this._sendError(request, err)
+          if (message.id) this._sendError(request, err)
+          else this._stream.destroy(err)
         }
         break
       case t.RESPONSE:
