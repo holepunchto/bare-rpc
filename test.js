@@ -489,9 +489,7 @@ test('request and reply stream backpressure, ipc', async (t) => {
 
   const reply = req.createResponseStream()
 
-  reply
-    .on('data', (data) => received.push(data))
-    .on('end', () => t.alike(sent, received))
+  reply.on('data', (data) => received.push(data)).on('end', () => t.alike(sent, received))
 })
 
 test('event', async (t) => {
