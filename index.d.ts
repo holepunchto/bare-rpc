@@ -1,11 +1,5 @@
 import Buffer, { BufferEncoding } from 'bare-buffer'
-import {
-  Readable,
-  ReadableOptions,
-  Writable,
-  WritableOptions,
-  Duplex
-} from 'bare-stream'
+import { Readable, ReadableOptions, Writable, WritableOptions, Duplex } from 'bare-stream'
 
 declare const constants: {
   type: { REQUEST: 1; RESPONSE: 2; STREAM: 3 }
@@ -106,10 +100,7 @@ interface RPC {
 }
 
 declare class RPC {
-  constructor(
-    stream: Duplex,
-    onrequest: (req: RPCIncomingRequest) => void | Promise<void>
-  )
+  constructor(stream: Duplex, onrequest: (req: RPCIncomingRequest) => void | Promise<void>)
 }
 
 declare namespace RPC {

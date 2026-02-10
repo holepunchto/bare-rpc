@@ -39,10 +39,7 @@ module.exports = exports = class RPC {
     this._ondata = this._ondata.bind(this)
     this._ondrain = this._ondrain.bind(this)
 
-    this._stream
-      .on('error', this._onerror)
-      .on('data', this._ondata)
-      .on('drain', this._ondrain)
+    this._stream.on('error', this._onerror).on('data', this._ondata).on('drain', this._ondrain)
   }
 
   event(command) {
@@ -92,25 +89,13 @@ module.exports = exports = class RPC {
     if (isInitiator) {
       this._outgoingRequests.set(request.id, request)
 
-      request._requestStream = new OutgoingStream(
-        this,
-        request,
-        t.REQUEST,
-        opts
-      )
+      request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
     } else {
       this._incomingRequests.set(request.id, request)
 
-      request._requestStream = new IncomingStream(
-        this,
-        request,
-        t.REQUEST,
-        opts
-      )
+      request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
 
-      request._requestStream.on('close', () =>
-        this._incomingRequests.delete(request.id)
-      )
+      request._requestStream.on('close', () => this._incomingRequests.delete(request.id))
     }
   }
 
@@ -128,25 +113,13 @@ module.exports = exports = class RPC {
     if (isInitiator) {
       this._outgoingResponses.set(request.id, request)
 
-      request._responseStream = new OutgoingStream(
-        this,
-        request,
-        t.RESPONSE,
-        opts
-      )
+      request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
     } else {
       this._incomingResponses.set(request.id, request)
 
-      request._responseStream = new IncomingStream(
-        this,
-        request,
-        t.RESPONSE,
-        opts
-      )
+      request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
 
-      request._responseStream.on('close', () =>
-        this._incomingResponses.delete(request.id)
-      )
+      request._responseStream.on('close', () => this._incomingResponses.delete(request.id))
     }
   }
 
@@ -180,8 +153,7 @@ module.exports = exports = class RPC {
   _onbeforeframe() {
     if (this._buffered < 4) return
 
-    const buffer =
-      this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
+    const buffer = this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
     this._buffer = [buffer]
     this._frame = 4 + c.uint32.decode(c.state(0, 4, buffer))
@@ -192,8 +164,7 @@ module.exports = exports = class RPC {
   _onafterframe() {
     if (this._buffered < this._frame) return
 
-    const buffer =
-      this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
+    const buffer = this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
     const frame = this._frame
 
@@ -220,12 +191,7 @@ module.exports = exports = class RPC {
         const request =
           message.id === 0
             ? new IncomingEvent(this, message.command, message.data)
-            : new IncomingRequest(
-                this,
-                message.id,
-                message.command,
-                message.data
-              )
+            : new IncomingRequest(this, message.id, message.command, message.data)
 
         try {
           await this._onrequest(request)
