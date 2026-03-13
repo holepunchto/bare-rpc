@@ -19,7 +19,8 @@
     "lib"
   ],
   "scripts": {
-    "test": "prettier . --check && bare test.js"
+    "test": "prettier . --check && bare test.js",
+    "format": "prettier --write ."
   },
   "repository": {
     "type": "git",
