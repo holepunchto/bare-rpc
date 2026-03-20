@@ -11,7 +11,8 @@
     "./errors": {
       "types": "./lib/errors.d.ts",
       "default": "./lib/errors.js"
-    }
+    },
+    "./messages": "./lib/messages.js"
   },
   "files": [
     "index.js",
