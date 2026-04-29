@@ -8,6 +8,7 @@
       "default": "./index.js"
     },
     "./package": "./package.json",
+    "./constants": "./lib/constants.js",
     "./errors": {
       "types": "./lib/errors.d.ts",
       "default": "./lib/errors.js"
