@@ -187,7 +187,7 @@ module.exports = exports = class RPC {
     }
 
     switch (message.type) {
-      case t.REQUEST:
+      case t.REQUEST: {
         const request =
           message.id === 0
             ? new IncomingEvent(this, message.command, message.data)
@@ -202,6 +202,7 @@ module.exports = exports = class RPC {
           else this._stream.destroy(err)
         }
         break
+      }
       case t.RESPONSE:
         try {
           this._onresponse(message)

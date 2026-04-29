@@ -21,8 +21,9 @@
     "lib"
   ],
   "scripts": {
-    "test": "prettier . --check && bare test.js",
-    "format": "prettier --write ."
+    "format": "prettier --write . && lunte --fix",
+    "lint": "prettier --check . && lunte",
+    "test": "brittle-bare --coverage test.js"
   },
   "repository": {
     "type": "git",
@@ -44,6 +45,7 @@
     "bare-buffer": "^3.0.1",
     "bare-ipc": "^1.1.0",
     "brittle": "^3.2.1",
+    "lunte": "^1.7.0",
     "prettier": "^3.4.2",
     "prettier-config-holepunch": "^2.0.0"
   },
