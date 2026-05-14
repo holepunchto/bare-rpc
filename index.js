@@ -256,7 +256,7 @@ module.exports = exports = class RPC {
 
       stream = request._requestStream
 
-      if (stream._pendingOpen === null) {
+      if (stream === null || stream._pendingOpen === null) {
         this._pendingRequests.add(message.id)
         return
       }
@@ -269,7 +269,7 @@ module.exports = exports = class RPC {
 
       stream = request._responseStream
 
-      if (stream._pendingOpen === null) {
+      if (stream === null || stream._pendingOpen === null) {
         this._pendingResponses.add(message.id)
         return
       }
@@ -297,6 +297,7 @@ module.exports = exports = class RPC {
       return
     }
 
+    if (stream === null) return
     if (message.error) stream.destroy(message.error)
     else stream.push(null)
   }
@@ -318,6 +319,7 @@ module.exports = exports = class RPC {
       return
     }
 
+    if (stream === null) return
     stream.cork()
   }
 
@@ -338,6 +340,7 @@ module.exports = exports = class RPC {
       return
     }
 
+    if (stream === null) return
     stream.uncork()
   }
 
@@ -358,6 +361,7 @@ module.exports = exports = class RPC {
       return
     }
 
+    if (stream === null) return
     if (stream.push(message.data) === false) {
       this._sendMessage({
         type: t.STREAM,
@@ -386,6 +390,7 @@ module.exports = exports = class RPC {
       return
     }
 
+    if (stream === null) return
     stream.push(null)
   }
 
@@ -406,6 +411,7 @@ module.exports = exports = class RPC {
       return
     }
 
+    if (stream === null) return
     stream.destroy(message.error)
   }
 
