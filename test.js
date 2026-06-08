@@ -35,7 +35,7 @@ test('string encoding', async (t) => {
 test('empty request', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
     t.is(req.command, 42)
-    t.is(req.data, null)
+    t.alike(req.data, Buffer.alloc(0))
 
     req.reply('pong')
   })
@@ -57,7 +57,7 @@ test('empty response', async (t) => {
   const req = rpc.request(42)
   req.send('ping')
 
-  t.alike(await req.reply(), null)
+  t.alike(await req.reply(), Buffer.alloc(0))
 })
 
 test('compact encoding', async (t) => {
@@ -245,6 +245,25 @@ test('command router', async (t) => {
 
   const req = rpc.request(42)
   req.send('ping')
+
+  t.alike(await req.reply(), Buffer.from('pong'))
+})
+
+test('command router, empty request', async (t) => {
+  t.plan(2)
+
+  const router = new RPC.CommandRouter()
+
+  router.respond(42, (req, data) => {
+    t.alike(data, Buffer.alloc(0))
+
+    return Buffer.from('pong')
+  })
+
+  const rpc = new RPC(new PassThrough(), router)
+
+  const req = rpc.request(42)
+  req.send()
 
   t.alike(await req.reply(), Buffer.from('pong'))
 })
