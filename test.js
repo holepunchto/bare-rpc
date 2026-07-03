@@ -3,6 +3,8 @@ const c = require('compact-encoding')
 const { PassThrough } = require('bare-stream')
 const IPC = require('bare-ipc')
 const RPC = require('.')
+const m = require('./lib/messages')
+const { type: messageType } = require('./lib/constants')
 
 test('basic', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
@@ -314,6 +316,30 @@ test('throw an error with string errno', async (t) => {
   req.send('ping')
 
   await t.exception(req.reply(), /Nope/)
+})
+
+test('error with null code round-trips to empty string', (t) => {
+  const error = new Error('Nope')
+  error.code = null
+
+  const message = { type: messageType.RESPONSE, id: 1, stream: 0, error, data: null }
+
+  const encoded = c.encode(m.header, message)
+  const decoded = c.decode(m.message, encoded)
+
+  t.is(decoded.error.code, '')
+})
+
+test('error with undefined code round-trips to empty string', (t) => {
+  const error = new Error('Nope')
+  error.code = undefined
+
+  const message = { type: messageType.RESPONSE, id: 1, stream: 0, error, data: null }
+
+  const encoded = c.encode(m.header, message)
+  const decoded = c.decode(m.message, encoded)
+
+  t.is(decoded.error.code, '')
 })
 
 test('request and reply, ipc', async (t) => {
