@@ -625,4 +625,49 @@ test('idle after response stream', async (t) => {
   t.ok(rpc.idle)
 })
 
+test('rejects pending requests when the underlying stream errors', async (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  const exception = t.exception(req.reply(), /boom/)
+
+  stream.destroy(new Error('boom'))
+
+  await exception
+
+  t.ok(rpc.idle)
+})
+
+test('destroys in-flight request streams when the underlying stream errors', async (t) => {
+  t.plan(2)
+
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  const req = rpc.request(42)
+
+  const requestStream = req.createRequestStream()
+  requestStream.on('error', (err) => t.is(err.message, 'boom')).on('close', () => t.ok(rpc.idle))
+
+  stream.destroy(new Error('boom'))
+})
+
+test('destroys in-flight response streams when the underlying stream errors', async (t) => {
+  t.plan(2)
+
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, (req) => req.createResponseStream())
+
+  const req = rpc.request(42)
+  req.send('foo')
+
+  const reply = req.createResponseStream()
+  reply.on('error', (err) => t.is(err.message, 'boom')).on('close', () => t.ok(rpc.idle))
+
+  stream.destroy(new Error('boom'))
+})
+
 function noop() {}

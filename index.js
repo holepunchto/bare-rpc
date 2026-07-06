@@ -64,6 +64,14 @@ module.exports = exports = class RPC {
   }
 
   _sendMessage(message, cb) {
+    // Once the underlying stream is being torn down there is nowhere left to
+    // write, so drop the message and settle the callback immediately. This
+    // keeps stream teardown from stalling on a drain that will never arrive.
+    if (this._stream.destroying) {
+      if (cb) cb(null)
+      return
+    }
+
     const header = c.encode(m.header, message)
 
     let flushed = this._stream.write(header)
@@ -169,7 +177,40 @@ module.exports = exports = class RPC {
   _onerror(err) {
     this._ondrain(err)
 
-    // TODO Destroy pending requests and responses
+    // Reject any request awaiting a plain reply. Requests whose response is
+    // delivered over a stream are torn down through that stream below.
+    for (const request of this._outgoingRequests.values()) {
+      if (request.received && request._responseStream === null) request._reject(err)
+    }
+
+    // Collect the streams first, deduplicating as a single request may appear
+    // in more than one map, then destroy them once the maps have been cleared.
+    const streams = new Set()
+
+    for (const request of this._outgoingRequests.values()) {
+      if (request._requestStream !== null) streams.add(request._requestStream)
+    }
+
+    for (const request of this._incomingRequests.values()) {
+      if (request._requestStream !== null) streams.add(request._requestStream)
+    }
+
+    for (const request of this._outgoingResponses.values()) {
+      if (request._responseStream !== null) streams.add(request._responseStream)
+    }
+
+    for (const request of this._incomingResponses.values()) {
+      if (request._responseStream !== null) streams.add(request._responseStream)
+    }
+
+    this._outgoingRequests.clear()
+    this._outgoingResponses.clear()
+    this._incomingRequests.clear()
+    this._incomingResponses.clear()
+    this._pendingRequests.clear()
+    this._pendingResponses.clear()
+
+    for (const stream of streams) stream.destroy(err)
   }
 
   _ondata(data) {
