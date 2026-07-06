@@ -562,3 +562,67 @@ test('throw in event request handler', async (t) => {
   const req = rpc.event(42)
   req.send('ping')
 })
+
+test('idle after reply', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => req.reply('pong'))
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  await req.reply()
+
+  t.ok(rpc.idle)
+})
+
+test('idle after request stream', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    const stream = req.createRequestStream()
+    stream.on('end', () => req.reply('bar')).resume()
+  })
+
+  const req = rpc.request(42)
+
+  const stream = req.createRequestStream()
+  stream.end('foo')
+
+  await req.reply()
+
+  if (!stream.destroyed) await new Promise((resolve) => stream.on('close', resolve))
+
+  t.ok(rpc.idle)
+})
+
+test('idle after request stream destroy', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    const stream = req.createRequestStream()
+    stream.on('close', () => req.reply('foo'))
+  })
+
+  const req = rpc.request(42)
+
+  const stream = req.createRequestStream()
+  setImmediate(() => stream.destroy())
+
+  await req.reply()
+
+  if (!stream.destroyed) await new Promise((resolve) => stream.on('close', resolve))
+
+  t.ok(rpc.idle)
+})
+
+test('idle after response stream', async (t) => {
+  const rpc = new RPC(new PassThrough(), (req) => {
+    req.createResponseStream().end('bar')
+  })
+
+  const req = rpc.request(42)
+  req.send('foo')
+
+  const reply = req.createResponseStream()
+
+  await new Promise((resolve) => reply.on('data', noop).on('close', resolve))
+
+  t.ok(rpc.idle)
+})
+
+function noop() {}
