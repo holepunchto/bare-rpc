@@ -95,6 +95,8 @@ declare class RPCOutgoingStream extends Writable {
 }
 
 interface RPC {
+  readonly idle: boolean
+
   event(command: number): RPCOutgoingEvent
   request(command: number): RPCOutgoingRequest
 }

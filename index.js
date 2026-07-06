@@ -42,6 +42,19 @@ module.exports = exports = class RPC {
     this._stream.on('error', this._onerror).on('data', this._ondata).on('drain', this._ondrain)
   }
 
+  // Whether there are no requests or responses currently in flight. Useful for
+  // determining when it is safe to tear down the underlying stream.
+  get idle() {
+    return (
+      this._outgoingRequests.size === 0 &&
+      this._outgoingResponses.size === 0 &&
+      this._incomingRequests.size === 0 &&
+      this._incomingResponses.size === 0 &&
+      this._pendingRequests.size === 0 &&
+      this._pendingResponses.size === 0
+    )
+  }
+
   event(command) {
     return new OutgoingEvent(this, command)
   }
@@ -90,6 +103,8 @@ module.exports = exports = class RPC {
       this._outgoingRequests.set(request.id, request)
 
       request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
+
+      request._requestStream.on('close', () => this._gcOutgoingRequest(request))
     } else {
       this._incomingRequests.set(request.id, request)
 
@@ -114,12 +129,19 @@ module.exports = exports = class RPC {
       this._outgoingResponses.set(request.id, request)
 
       request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
+
+      request._responseStream.on('close', () => this._outgoingResponses.delete(request.id))
     } else {
       this._incomingResponses.set(request.id, request)
 
       request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
 
-      request._responseStream.on('close', () => this._incomingResponses.delete(request.id))
+      request._responseStream.on('close', () => {
+        this._incomingResponses.delete(request.id)
+
+        request._responded = true
+        this._gcOutgoingRequest(request)
+      })
     }
   }
 
@@ -131,6 +153,17 @@ module.exports = exports = class RPC {
       error: err,
       data: null
     })
+  }
+
+  _gcOutgoingRequest(request) {
+    // The entry must stay reachable for as long as an incoming message might
+    // still target it; until the response has settled and, if the request was
+    // streamed, until the outgoing request stream has closed. Either can be the
+    // last to arrive, so only remove the entry once both have completed.
+    if (!request._responded) return
+    if (request._requestStream !== null && !request._requestStream.destroyed) return
+
+    this._outgoingRequests.delete(request.id)
   }
 
   _onerror(err) {
@@ -226,8 +259,14 @@ module.exports = exports = class RPC {
     if (request === undefined) return
 
     if (message.error) {
+      request._responded = true
+      this._gcOutgoingRequest(request)
+
       request._reject(message.error)
     } else if (message.stream === 0) {
+      request._responded = true
+      this._gcOutgoingRequest(request)
+
       request._resolve(message.data)
     }
   }
