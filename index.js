@@ -2,6 +2,7 @@ const safetyCatch = require('safety-catch')
 const b4a = require('b4a')
 const c = require('compact-encoding')
 const m = require('./lib/messages')
+const errors = require('./lib/errors')
 const { type: t, stream: s } = require('./lib/constants')
 const IncomingEvent = require('./lib/incoming-event')
 const IncomingRequest = require('./lib/incoming-request')
@@ -36,10 +37,15 @@ module.exports = exports = class RPC {
 
     this._onrequest = onrequest
     this._onerror = this._onerror.bind(this)
+    this._onclose = this._onclose.bind(this)
     this._ondata = this._ondata.bind(this)
     this._ondrain = this._ondrain.bind(this)
 
-    this._stream.on('error', this._onerror).on('data', this._ondata).on('drain', this._ondrain)
+    this._stream
+      .on('error', this._onerror)
+      .on('close', this._onclose)
+      .on('data', this._ondata)
+      .on('drain', this._ondrain)
   }
 
   // Whether there are no requests or responses currently in flight. Useful for
@@ -175,6 +181,17 @@ module.exports = exports = class RPC {
   }
 
   _onerror(err) {
+    this._teardown(err)
+  }
+
+  _onclose() {
+    // A clean close of the underlying stream leaves in-flight requests and
+    // responses with nowhere to complete, so tear them down as if the channel
+    // had errored.
+    this._teardown(errors.CHANNEL_CLOSED('Channel closed'))
+  }
+
+  _teardown(err) {
     this._ondrain(err)
 
     // Reject any request awaiting a plain reply. Requests whose response is

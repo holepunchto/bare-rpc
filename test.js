@@ -670,4 +670,67 @@ test('destroys in-flight response streams when the underlying stream errors', as
   stream.destroy(new Error('boom'))
 })
 
+test('rejects pending requests when the underlying stream closes', async (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  const exception = t.exception(req.reply(), /CHANNEL_CLOSED/)
+
+  stream.destroy()
+
+  await exception
+
+  t.ok(rpc.idle)
+})
+
+test('destroys in-flight request streams when the underlying stream closes', async (t) => {
+  t.plan(2)
+
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  const req = rpc.request(42)
+
+  const requestStream = req.createRequestStream()
+  requestStream
+    .on('error', (err) => t.is(err.code, 'CHANNEL_CLOSED'))
+    .on('close', () => t.ok(rpc.idle))
+
+  stream.destroy()
+})
+
+test('destroys in-flight response streams when the underlying stream closes', async (t) => {
+  t.plan(2)
+
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, (req) => req.createResponseStream())
+
+  const req = rpc.request(42)
+  req.send('foo')
+
+  const reply = req.createResponseStream()
+  reply.on('error', (err) => t.is(err.code, 'CHANNEL_CLOSED')).on('close', () => t.ok(rpc.idle))
+
+  stream.destroy()
+})
+
+test('rejects pending requests when the underlying stream ends', async (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  const exception = t.exception(req.reply(), /CHANNEL_CLOSED/)
+
+  stream.end()
+
+  await exception
+
+  t.ok(rpc.idle)
+})
+
 function noop() {}
