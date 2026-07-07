@@ -29,6 +29,9 @@ module.exports = exports = class RPC {
     this._frame = -1
     this._draining = []
 
+    this._closed = false
+    this._error = null
+
     if (typeof onrequest === 'function') {
       onrequest = onrequest.bind(this)
     } else {
@@ -101,6 +104,11 @@ module.exports = exports = class RPC {
   }
 
   _sendRequest(request, data = null) {
+    // Once the channel has been torn down there is nowhere left to send the
+    // request. Skip registering it so that it never leaks into the maps; the
+    // awaiting reply is rejected through `RPCOutgoingRequest.reply()` instead.
+    if (this._closed) return
+
     this._outgoingRequests.set(request.id, request)
 
     this._sendMessage({
@@ -114,15 +122,21 @@ module.exports = exports = class RPC {
 
   _createRequestStream(request, isInitiator, opts) {
     if (isInitiator) {
-      this._outgoingRequests.set(request.id, request)
-
       request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
+
+      // Once the channel has been torn down there is nowhere left to open the
+      // stream, so destroy it right away rather than leave it hanging.
+      if (this._closed) return request._requestStream.destroy(this._error)
+
+      this._outgoingRequests.set(request.id, request)
 
       request._requestStream.on('close', () => this._gcOutgoingRequest(request))
     } else {
-      this._incomingRequests.set(request.id, request)
-
       request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
+
+      if (this._closed) return request._requestStream.destroy(this._error)
+
+      this._incomingRequests.set(request.id, request)
 
       request._requestStream.on('close', () => this._incomingRequests.delete(request.id))
     }
@@ -140,15 +154,21 @@ module.exports = exports = class RPC {
 
   _createResponseStream(request, isInitiator, opts) {
     if (isInitiator) {
-      this._outgoingResponses.set(request.id, request)
-
       request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
+
+      // Once the channel has been torn down there is nowhere left to open the
+      // stream, so destroy it right away rather than leave it hanging.
+      if (this._closed) return request._responseStream.destroy(this._error)
+
+      this._outgoingResponses.set(request.id, request)
 
       request._responseStream.on('close', () => this._outgoingResponses.delete(request.id))
     } else {
-      this._incomingResponses.set(request.id, request)
-
       request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
+
+      if (this._closed) return request._responseStream.destroy(this._error)
+
+      this._incomingResponses.set(request.id, request)
 
       request._responseStream.on('close', () => {
         this._incomingResponses.delete(request.id)
@@ -192,6 +212,11 @@ module.exports = exports = class RPC {
   }
 
   _teardown(err) {
+    // Mark the channel as closed so that any calls made from here on are
+    // rejected or destroyed immediately rather than left hanging.
+    this._closed = true
+    this._error = err
+
     this._ondrain(err)
 
     // Reject any request awaiting a plain reply. Requests whose response is

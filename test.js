@@ -733,4 +733,72 @@ test('rejects pending requests when the underlying stream ends', async (t) => {
   t.ok(rpc.idle)
 })
 
+test('rejects requests sent after the underlying stream closes', async (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  stream.destroy()
+
+  await new Promise((resolve) => stream.once('close', resolve))
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  await t.exception(req.reply(), /CHANNEL_CLOSED/)
+
+  t.ok(rpc.idle)
+})
+
+test('rejects requests whose reply is awaited after the underlying stream closes', async (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  stream.destroy()
+
+  await new Promise((resolve) => stream.once('close', resolve))
+
+  await t.exception(req.reply(), /CHANNEL_CLOSED/)
+
+  t.ok(rpc.idle)
+})
+
+test('destroys request streams created after the underlying stream closes', async (t) => {
+  t.plan(2)
+
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  stream.destroy()
+
+  await new Promise((resolve) => stream.once('close', resolve))
+
+  const req = rpc.request(42)
+
+  const requestStream = req.createRequestStream()
+  requestStream
+    .on('error', (err) => t.is(err.code, 'CHANNEL_CLOSED'))
+    .on('close', () => t.ok(rpc.idle))
+})
+
+test('destroys response streams created after the underlying stream closes', async (t) => {
+  t.plan(2)
+
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+
+  stream.destroy()
+
+  await new Promise((resolve) => stream.once('close', resolve))
+
+  const req = rpc.request(42)
+
+  const responseStream = req.createResponseStream()
+  responseStream
+    .on('error', (err) => t.is(err.code, 'CHANNEL_CLOSED'))
+    .on('close', () => t.ok(rpc.idle))
+})
+
 function noop() {}
