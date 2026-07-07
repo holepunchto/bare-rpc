@@ -1,6 +1,6 @@
 {
   "name": "bare-rpc",
-  "version": "1.3.6",
+  "version": "1.3.7",
   "description": "librpc ABI compatible RPC for Bare",
   "exports": {
     ".": {
