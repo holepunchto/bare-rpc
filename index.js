@@ -143,6 +143,12 @@ module.exports = exports = class RPC {
   }
 
   _sendResponse(request, data) {
+    // Once the channel has been torn down there is nowhere left to send the
+    // response, so drop it rather than encode and write a message that would
+    // only be discarded. The reply is fire-and-forget, so there is nothing to
+    // settle.
+    if (this._closed) return
+
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
