@@ -29,7 +29,7 @@ console.log(replyBuffer.toString()) // pong
 
 ## API
 
-See the [full API reference](https://docs.pears.com/reference/bare/modules/bare-rpc).
+See the [`bare-rpc` reference](https://docs.pears.com/reference/bare/modules/bare-rpc).
 
 ## License
 
