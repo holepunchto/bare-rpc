@@ -45,6 +45,7 @@
     "bare-buffer": "^3.0.1",
     "bare-ipc": "^1.1.0",
     "brittle": "^3.2.1",
+    "hrpc-test": "^0.1.0",
     "lunte": "^1.7.0",
     "prettier": "^3.4.2",
     "prettier-config-holepunch": "^2.0.0"

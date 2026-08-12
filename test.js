@@ -6,6 +6,8 @@ const RPC = require('.')
 const m = require('./lib/messages')
 const { type: messageType } = require('./lib/constants')
 
+require('./test/vectors')
+
 test('basic', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
     t.is(req.command, 42)
