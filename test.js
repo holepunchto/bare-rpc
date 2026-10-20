@@ -461,7 +461,7 @@ test('large request and reply, ipc', async (t) => {
 })
 
 test('large request and reply stream, ipc', async (t) => {
-  t.plan(2)
+  t.plan(3)
 
   const ports = IPC.open()
 
@@ -487,9 +487,11 @@ test('large request and reply stream, ipc', async (t) => {
 
   const reply = req.createResponseStream()
 
-  reply.on('data', (data) => {
-    t.alike(data, Buffer.alloc(4 * 1024 * 1024, 'ping'))
-  })
+  reply
+    .on('data', (data) => {
+      t.alike(data, Buffer.alloc(4 * 1024 * 1024, 'ping'))
+    })
+    .on('end', () => t.pass('stream ended'))
 })
 
 test('request and reply stream backpressure, ipc', async (t) => {
