@@ -1,11 +1,11 @@
-// Conformance against hrpc-test's shared vectors.
+// Conformance against bare-rpc-test's shared vectors.
 //
 // This package is the reference implementation of the wire format the C, Swift
 // and Python ports are held to, so a change that moves a byte should fail here,
 // in the PR that causes it, rather than downstream months later.
 const test = require('brittle')
 const c = require('compact-encoding')
-const { families, loadFamily, loadNegative, loadSequence } = require('hrpc-test')
+const { families, loadFamily, loadNegative, loadSequence } = require('bare-rpc-test')
 
 const m = require('../lib/messages')
 
