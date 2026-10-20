@@ -273,19 +273,26 @@ module.exports = exports = class RPC {
   }
 
   _onbeforeframe() {
-    if (this._buffered < 4) return
+    while (this._buffered >= 4) {
+      const buffer = this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
-    const buffer = this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
+      this._buffer = [buffer]
+      this._frame = 4 + c.uint32.decode(c.state(0, 4, buffer))
 
-    this._buffer = [buffer]
-    this._frame = 4 + c.uint32.decode(c.state(0, 4, buffer))
+      if (this._buffered < this._frame) return
 
-    this._onafterframe()
+      this._onframe()
+    }
   }
 
   _onafterframe() {
     if (this._buffered < this._frame) return
 
+    this._onframe()
+    this._onbeforeframe()
+  }
+
+  _onframe() {
     const buffer = this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
     const frame = this._frame
@@ -295,7 +302,6 @@ module.exports = exports = class RPC {
     this._frame = -1
 
     this._onmessage(buffer.subarray(0, frame))
-    this._onbeforeframe()
   }
 
   async _onmessage(buffer) {
