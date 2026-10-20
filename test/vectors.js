@@ -5,7 +5,13 @@
 // in the PR that causes it, rather than downstream months later.
 const test = require('brittle')
 const c = require('compact-encoding')
-const { families, loadFamily, loadNegative, loadSequence } = require('bare-rpc-test')
+const {
+  families,
+  loadFamily,
+  loadNegative,
+  loadDecodeOnly,
+  loadSequence
+} = require('bare-rpc-test')
 
 const m = require('../lib/messages')
 
@@ -31,6 +37,12 @@ for (const family of families) {
 test('vectors: negative frames are rejected', (t) => {
   for (const { hex, reason } of loadNegative()) {
     t.exception.all(() => decodeFrame(hex), reason)
+  }
+})
+
+test('vectors: decode-only frames decode to the committed descriptors', (t) => {
+  for (const { hex, descriptor, reason } of loadDecodeOnly()) {
+    t.alike(project(decodeFrame(hex)), descriptor, reason)
   }
 })
 
