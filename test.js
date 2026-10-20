@@ -553,6 +553,26 @@ test('event', async (t) => {
   req.send('ping')
 })
 
+test('many frames in one chunk', (t) => {
+  t.plan(1)
+
+  const count = 100000
+
+  const stream = new PassThrough()
+
+  let received = 0
+
+  new RPC(stream, () => {
+    if (++received === count) t.pass('every frame received')
+  })
+
+  const data = Buffer.from('ping')
+  const message = { type: messageType.REQUEST, id: 0, command: 42, stream: 0, data }
+  const frame = Buffer.concat([c.encode(m.header, message), data])
+
+  stream.write(Buffer.concat(new Array(count).fill(frame)))
+})
+
 test('throw in event request handler', async (t) => {
   t.plan(1)
 
