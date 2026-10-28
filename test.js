@@ -825,4 +825,25 @@ test('destroys response streams created after the underlying stream closes', asy
     .on('close', () => t.ok(rpc.idle))
 })
 
+test('stream frame with error and data flags carries no payload', (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream, () => {})
+  const collected = []
+  const write = stream.write.bind(stream)
+  stream.write = (chunk) => {
+    collected.push(chunk)
+    return write(chunk)
+  }
+
+  rpc._sendMessage({
+    type: messageType.STREAM, // 3
+    id: 2,
+    stream: 0x192, // REQUEST | ERROR | DATA
+    error: { code: 'E', message: 'gone', errno: 1 },
+    data: Buffer.from([0x01])
+  })
+
+  t.is(Buffer.concat(collected).toString('hex'), '0d0000000302fd920104676f6e65014502')
+})
+
 function noop() {}

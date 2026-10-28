@@ -85,7 +85,7 @@ module.exports = exports = class RPC {
 
     let flushed = this._stream.write(header)
 
-    if (message.data) flushed = this._stream.write(message.data)
+    if (message.data && m.hasData(message)) flushed = this._stream.write(message.data)
 
     if (cb) {
       if (flushed) cb(null)
