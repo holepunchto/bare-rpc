@@ -190,6 +190,53 @@ declare class RPCOutgoingStream extends Writable {
   )
 }
 
+/** A [`compact-encoding`](https://github.com/holepunchto/compact-encoding) encoding, such as `c.raw`. */
+interface RPCValueEncoding {
+  preencode(state: unknown, value: unknown): void
+  encode(state: unknown, value: unknown): void
+  decode(state: unknown): unknown
+}
+
+interface RPCCommandRouterOptions {
+  /** The encoding of request and response data for commands that set none (defaults to `c.raw`). */
+  valueEncoding?: RPCValueEncoding
+}
+
+interface RPCRespondOptions {
+  /** The encoding of both the request and the response data. */
+  valueEncoding?: RPCValueEncoding
+  /** The encoding to decode the request data with, or `null` to pass the raw buffer. */
+  requestEncoding?: RPCValueEncoding | null
+  /** The encoding to encode the response data with, or `null` to reply with the value as is. */
+  responseEncoding?: RPCValueEncoding | null
+}
+
+/**
+ * @param req - The incoming request.
+ * @param data - The request data, decoded with the request encoding of the command.
+ * @returns the response data, encoded with the response encoding of the command and sent as the
+ * reply unless the handler has already replied.
+ */
+type RPCRequestHandler = (req: RPCIncomingRequest, data: any) => unknown
+
+interface RPCCommandRouter {
+  /**
+   * Answer requests for `command` with `onrequest`, in place of any handler registered before.
+   * @param command - The command number to answer.
+   * @param opts - The encodings of the command.
+   * @param onrequest - The handler of the requests.
+   */
+  respond(command: number, onrequest: RPCRequestHandler): void
+  respond(command: number, opts: RPCRespondOptions, onrequest: RPCRequestHandler): void
+}
+
+declare class RPCCommandRouter {
+  /**
+   * @param opts - The default encodings of the commands.
+   */
+  constructor(opts?: RPCCommandRouterOptions)
+}
+
 interface RPC {
   /**
    * Whether there are no requests or responses currently in flight. Useful for determining when it
@@ -216,9 +263,14 @@ declare class RPC {
   /**
    * @param stream - The duplex stream to frame RPC messages over, such as a pipe or socket.
    * @param onrequest - Callback run for each incoming request or event, receiving an
-   * `RPCIncomingRequest` (or `RPCIncomingEvent`) to inspect and `reply()` to. Defaults to a no-op.
+   * `RPCIncomingRequest` (or `RPCIncomingEvent`) to inspect and `reply()` to, or an
+   * `RPCCommandRouter` that answers each request with the handler of its command. Defaults to a
+   * no-op.
    */
-  constructor(stream: Duplex, onrequest: (req: RPCIncomingRequest) => void | Promise<void>)
+  constructor(
+    stream: Duplex,
+    onrequest?: ((req: RPCIncomingRequest) => void | Promise<void>) | RPCCommandRouter
+  )
 }
 
 /**
@@ -233,7 +285,12 @@ declare namespace RPC {
     type RPCIncomingRequest as IncomingRequest,
     type RPCOutgoingRequest as OutgoingRequest,
     type RPCIncomingStream as IncomingStream,
-    type RPCOutgoingStream as OutgoingStream
+    type RPCOutgoingStream as OutgoingStream,
+    RPCCommandRouter as CommandRouter,
+    type RPCCommandRouterOptions as CommandRouterOptions,
+    type RPCRespondOptions as RespondOptions,
+    type RPCRequestHandler as RequestHandler,
+    type RPCValueEncoding as ValueEncoding
   }
 }
 
