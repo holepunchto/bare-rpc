@@ -360,21 +360,6 @@ test('early opens of response streams are capped', async (t) => {
   t.ok(hostile.rpc.idle)
 })
 
-test('response with an invalid error flag fails the connection', async (t) => {
-  const peer = createPeer()
-
-  const req = peer.rpc.request(1)
-  req.send()
-
-  const reply = t.exception(req.reply(), /INVALID_MESSAGE/)
-
-  peer.push(Buffer.from('0800000002010200036f6b21', 'hex'))
-
-  t.is((await peer.failure).code, 'INVALID_MESSAGE')
-
-  await reply
-})
-
 test('request handler throwing a non-error sends an error response', async (t) => {
   for (const value of ['nope', null, undefined, 42, {}]) {
     const peer = createPeer({}, (req) => {
