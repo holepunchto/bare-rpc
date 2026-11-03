@@ -378,6 +378,7 @@ test('request handler throwing a non-error sends an error response', async (t) =
     const response = lastWritten(peer)
 
     t.is(response.type, type.RESPONSE)
+    t.is(response.error.message, String(value))
     t.is(response.error.code, '')
     t.is(response.error.errno, 0)
   }
@@ -433,13 +434,13 @@ test('destroying a stream with a non-error sends an error', async (t) => {
   await closed(requestStream)
 
   t.is(lastWritten(peer).stream, s.REQUEST | s.CLOSE | s.ERROR)
-  t.ok(lastWritten(peer).error instanceof Error)
+  t.is(lastWritten(peer).error.message, 'x')
 
   responseStream.destroy(42)
   await closed(responseStream)
 
   t.is(lastWritten(peer).stream, s.RESPONSE | s.DESTROY | s.ERROR)
-  t.ok(lastWritten(peer).error instanceof Error)
+  t.is(lastWritten(peer).error.message, '42')
 })
 
 test('plain response for a streamed reply arrives on the response stream', async (t) => {
