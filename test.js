@@ -7,6 +7,7 @@ const m = require('./lib/messages')
 const { type: messageType } = require('./lib/constants')
 
 require('./test/vectors')
+require('./test/frames')
 
 test('basic', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
