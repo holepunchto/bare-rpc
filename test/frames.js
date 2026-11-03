@@ -239,8 +239,8 @@ test('frames for a destroyed stream are ignored', async (t) => {
   const responseStream = req.createResponseStream()
 
   const errors = []
-  requestStream.on('error', (err) => errors.push(err.message))
-  responseStream.on('error', (err) => errors.push(err.message))
+  requestStream.on('error', (err) => errors.push(err.code))
+  responseStream.on('error', (err) => errors.push(err.code))
 
   peer.push(frame({ type: type.STREAM, id: 1, stream: s.REQUEST | s.DESTROY | s.ERROR, error }))
   peer.push(frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.CLOSE | s.ERROR, error }))
@@ -261,7 +261,7 @@ test('frames for a destroyed stream are ignored', async (t) => {
   await peer.probe
   await new Promise(setImmediate)
 
-  t.alike(errors, ['boom', 'boom'])
+  t.alike(errors, ['E', 'E'])
   t.ok(requestStream.destroyed)
   t.ok(responseStream.destroyed)
 })
@@ -277,7 +277,7 @@ test('error response for a request whose reply is not awaited is not thrown', as
 
   await peer.probe
 
-  await t.exception(req.reply(), /boom/)
+  await t.exception(req.reply(), { code: 'E' })
 })
 
 test('error thrown by user code during frame handling fails the connection', async (t) => {
@@ -285,16 +285,18 @@ test('error thrown by user code during frame handling fails the connection', asy
 
   const req = peer.rpc.request(1)
 
+  const error = new Error('listener')
+
   const stream = req.createRequestStream()
   stream.on('error', noop).on('open', () => {
-    throw new Error('listener')
+    throw error
   })
 
   await new Promise(setImmediate)
 
   peer.push(frame({ type: type.STREAM, id: 1, stream: s.REQUEST | s.OPEN }))
 
-  t.is((await peer.failure).message, 'listener')
+  t.is(await peer.failure, error)
 })
 
 test('stream awaiting the remote open closes when the connection fails', async (t) => {
@@ -376,7 +378,8 @@ test('request handler throwing a non-error sends an error response', async (t) =
     const response = lastWritten(peer)
 
     t.is(response.type, type.RESPONSE)
-    t.is(response.error.message, String(value))
+    t.is(response.error.code, '')
+    t.is(response.error.errno, 0)
   }
 })
 
@@ -389,7 +392,7 @@ test('error response for a streamed reply destroys the response stream', (t) => 
   req.send()
 
   const stream = req.createResponseStream()
-  stream.on('error', (err) => t.is(err.message, 'boom')).on('close', () => t.ok(peer.rpc.idle))
+  stream.on('error', (err) => t.is(err.code, 'E')).on('close', () => t.ok(peer.rpc.idle))
 
   peer.push(
     frame({
@@ -430,13 +433,13 @@ test('destroying a stream with a non-error sends an error', async (t) => {
   await closed(requestStream)
 
   t.is(lastWritten(peer).stream, s.REQUEST | s.CLOSE | s.ERROR)
-  t.is(lastWritten(peer).error.message, 'x')
+  t.ok(lastWritten(peer).error instanceof Error)
 
   responseStream.destroy(42)
   await closed(responseStream)
 
   t.is(lastWritten(peer).stream, s.RESPONSE | s.DESTROY | s.ERROR)
-  t.is(lastWritten(peer).error.message, '42')
+  t.ok(lastWritten(peer).error instanceof Error)
 })
 
 test('plain response for a streamed reply arrives on the response stream', async (t) => {
@@ -486,7 +489,7 @@ test('plain response for an ended response stream is not pushed', async (t) => {
 test('request stream the responder never opens is released by the reply', async (t) => {
   for (const fail of [false, true]) {
     const rpc = new RPC(new PassThrough(), (req) => {
-      if (fail) throw new Error('boom')
+      if (fail) throw Object.assign(new Error('boom'), { code: 'E_BOOM' })
       req.reply('ok')
     })
 
@@ -494,20 +497,20 @@ test('request stream the responder never opens is released by the reply', async 
 
     const errors = []
 
-    const stream = req.createRequestStream().on('error', (err) => errors.push(err.message))
+    const stream = req.createRequestStream().on('error', (err) => errors.push(err.code))
 
     stream.write(Buffer.from('a'))
     stream.end()
 
     const drained = Writable.drained(stream)
 
-    if (fail) await t.exception(req.reply(), /boom/)
+    if (fail) await t.exception(req.reply(), { code: 'E_BOOM' })
     else t.alike(await req.reply(), Buffer.from('ok'))
 
     await closed(stream)
     await drained
 
-    t.alike(errors, fail ? ['boom'] : [])
+    t.alike(errors, fail ? ['E_BOOM'] : [])
     t.ok(rpc.idle)
   }
 })
@@ -592,7 +595,6 @@ test('command router answers an unknown command with an error', async (t) => {
   const err = await req.reply().catch((err) => err)
 
   t.is(err.code, 'UNKNOWN_COMMAND')
-  t.ok(err.message.includes('Unknown command 7'))
   t.is(err.errno, 0)
   t.ok(rpc.idle)
 })
