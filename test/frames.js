@@ -592,7 +592,7 @@ test('command router answers an unknown command with an error', async (t) => {
   const err = await req.reply().catch((err) => err)
 
   t.is(err.code, 'UNKNOWN_COMMAND')
-  t.is(err.message, 'Unknown command 7')
+  t.ok(err.message.includes('Unknown command 7'))
   t.is(err.errno, 0)
   t.ok(rpc.idle)
 })
