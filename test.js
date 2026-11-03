@@ -7,6 +7,7 @@ const m = require('./lib/messages')
 const { type: messageType } = require('./lib/constants')
 
 require('./test/vectors')
+require('./test/frames')
 
 test('basic', async (t) => {
   const rpc = new RPC(new PassThrough(), (req) => {
@@ -274,24 +275,24 @@ test('command router, empty request', async (t) => {
 
 test('throw in request handler', async (t) => {
   const rpc = new RPC(new PassThrough(), () => {
-    throw new Error('Nope')
+    throw Object.assign(new Error('Nope'), { code: 'E_NOPE' })
   })
 
   const req = rpc.request(42)
   req.send('ping')
 
-  await t.exception(req.reply(), /Nope/)
+  await t.exception(req.reply(), { code: 'E_NOPE' })
 })
 
 test('throw in async request handler', async (t) => {
   const rpc = new RPC(new PassThrough(), async () => {
-    throw new Error('Nope')
+    throw Object.assign(new Error('Nope'), { code: 'E_NOPE' })
   })
 
   const req = rpc.request(42)
   req.send('ping')
 
-  await t.exception(req.reply(), /Nope/)
+  await t.exception(req.reply(), { code: 'E_NOPE' })
 })
 
 test('throw an error with number code', async (t) => {
@@ -304,7 +305,7 @@ test('throw an error with number code', async (t) => {
   const req = rpc.request(42)
   req.send('ping')
 
-  await t.exception(req.reply(), /Nope/)
+  await t.exception(req.reply(), { code: '30' })
 })
 
 test('throw an error with string errno', async (t) => {
@@ -317,7 +318,7 @@ test('throw an error with string errno', async (t) => {
   const req = rpc.request(42)
   req.send('ping')
 
-  await t.exception(req.reply(), /Nope/)
+  await t.exception(req.reply(), { errno: 21 })
 })
 
 test('error with null code round-trips to empty string', (t) => {
@@ -576,10 +577,12 @@ test('many frames in one chunk', (t) => {
 test('throw in event request handler', async (t) => {
   t.plan(1)
 
+  const error = new Error('Nope')
+
   const rpc = new RPC(
-    new PassThrough().on('error', (err) => t.is(err.message, 'Nope')),
+    new PassThrough().on('error', (err) => t.is(err, error)),
     () => {
-      throw new Error('Nope')
+      throw error
     }
   )
 
@@ -656,11 +659,13 @@ test('rejects pending requests when the underlying stream errors', async (t) => 
   const req = rpc.request(42)
   req.send('ping')
 
-  const exception = t.exception(req.reply(), /boom/)
+  const error = new Error('boom')
 
-  stream.destroy(new Error('boom'))
+  const reply = req.reply().catch((err) => err)
 
-  await exception
+  stream.destroy(error)
+
+  t.is(await reply, error)
 
   t.ok(rpc.idle)
 })
@@ -674,9 +679,11 @@ test('destroys in-flight request streams when the underlying stream errors', asy
   const req = rpc.request(42)
 
   const requestStream = req.createRequestStream()
-  requestStream.on('error', (err) => t.is(err.message, 'boom')).on('close', () => t.ok(rpc.idle))
+  const error = new Error('boom')
 
-  stream.destroy(new Error('boom'))
+  requestStream.on('error', (err) => t.is(err, error)).on('close', () => t.ok(rpc.idle))
+
+  stream.destroy(error)
 })
 
 test('destroys in-flight response streams when the underlying stream errors', async (t) => {
@@ -689,9 +696,11 @@ test('destroys in-flight response streams when the underlying stream errors', as
   req.send('foo')
 
   const reply = req.createResponseStream()
-  reply.on('error', (err) => t.is(err.message, 'boom')).on('close', () => t.ok(rpc.idle))
+  const error = new Error('boom')
 
-  stream.destroy(new Error('boom'))
+  reply.on('error', (err) => t.is(err, error)).on('close', () => t.ok(rpc.idle))
+
+  stream.destroy(error)
 })
 
 test('rejects pending requests when the underlying stream closes', async (t) => {
@@ -701,7 +710,7 @@ test('rejects pending requests when the underlying stream closes', async (t) => 
   const req = rpc.request(42)
   req.send('ping')
 
-  const exception = t.exception(req.reply(), /CHANNEL_CLOSED/)
+  const exception = t.exception(req.reply(), { code: 'CHANNEL_CLOSED' })
 
   stream.destroy()
 
@@ -748,7 +757,7 @@ test('rejects pending requests when the underlying stream ends', async (t) => {
   const req = rpc.request(42)
   req.send('ping')
 
-  const exception = t.exception(req.reply(), /CHANNEL_CLOSED/)
+  const exception = t.exception(req.reply(), { code: 'CHANNEL_CLOSED' })
 
   stream.end()
 
@@ -768,7 +777,7 @@ test('rejects requests sent after the underlying stream closes', async (t) => {
   const req = rpc.request(42)
   req.send('ping')
 
-  await t.exception(req.reply(), /CHANNEL_CLOSED/)
+  await t.exception(req.reply(), { code: 'CHANNEL_CLOSED' })
 
   t.ok(rpc.idle)
 })
@@ -784,7 +793,7 @@ test('rejects requests whose reply is awaited after the underlying stream closes
 
   await new Promise((resolve) => stream.once('close', resolve))
 
-  await t.exception(req.reply(), /CHANNEL_CLOSED/)
+  await t.exception(req.reply(), { code: 'CHANNEL_CLOSED' })
 
   t.ok(rpc.idle)
 })

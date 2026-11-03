@@ -1,6 +1,7 @@
 const safetyCatch = require('safety-catch')
 const b4a = require('b4a')
 const c = require('compact-encoding')
+const { isEnding } = require('bare-stream')
 const m = require('./lib/messages')
 const errors = require('./lib/errors')
 const { type: t, stream: s } = require('./lib/constants')
@@ -12,17 +13,42 @@ const OutgoingRequest = require('./lib/outgoing-request')
 const OutgoingStream = require('./lib/outgoing-stream')
 const CommandRouter = require('./lib/command-router')
 
+const DEFAULT_MAX_FRAME_SIZE = 16 * 1024 * 1024
+const MAX_PENDING_RESPONSES = 1024
+
+const streamFlags = new Set()
+
+for (const direction of [s.REQUEST, s.RESPONSE]) {
+  for (const action of [
+    s.OPEN,
+    s.CLOSE,
+    s.CLOSE | s.ERROR,
+    s.PAUSE,
+    s.RESUME,
+    s.DATA,
+    s.END,
+    s.DESTROY,
+    s.DESTROY | s.ERROR
+  ]) {
+    streamFlags.add(direction | action)
+  }
+}
+
 module.exports = exports = class RPC {
-  constructor(stream, onrequest = noop) {
+  constructor(stream, onrequest = noop, opts = {}) {
+    const { maxFrameSize = DEFAULT_MAX_FRAME_SIZE } = opts
+
     this._stream = stream
+    this._maxFrameSize = maxFrameSize
     this._id = 0
 
     this._outgoingRequests = new Map()
     this._outgoingResponses = new Map()
     this._incomingRequests = new Map()
     this._incomingResponses = new Map()
-    this._pendingRequests = new Set()
     this._pendingResponses = new Set()
+    this._unansweredRequests = new Set()
+    this._highestRequestId = 0
 
     this._buffer = []
     this._buffered = 0
@@ -42,12 +68,14 @@ module.exports = exports = class RPC {
     this._onerror = this._onerror.bind(this)
     this._onclose = this._onclose.bind(this)
     this._ondata = this._ondata.bind(this)
+    this._onend = this._onend.bind(this)
     this._ondrain = this._ondrain.bind(this)
 
     this._stream
       .on('error', this._onerror)
       .on('close', this._onclose)
       .on('data', this._ondata)
+      .on('end', this._onend)
       .on('drain', this._ondrain)
   }
 
@@ -59,7 +87,6 @@ module.exports = exports = class RPC {
       this._outgoingResponses.size === 0 &&
       this._incomingRequests.size === 0 &&
       this._incomingResponses.size === 0 &&
-      this._pendingRequests.size === 0 &&
       this._pendingResponses.size === 0
     )
   }
@@ -149,6 +176,8 @@ module.exports = exports = class RPC {
     // settle.
     if (this._closed) return
 
+    this._onanswered(request)
+
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
@@ -168,6 +197,8 @@ module.exports = exports = class RPC {
 
       this._outgoingResponses.set(request.id, request)
 
+      if (this._onanswered(request)) request._responseStream._continueOpen()
+
       request._responseStream.on('close', () => this._outgoingResponses.delete(request.id))
     } else {
       request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
@@ -186,13 +217,21 @@ module.exports = exports = class RPC {
   }
 
   _sendError(request, err) {
+    this._onanswered(request)
+
     this._sendMessage({
       type: t.RESPONSE,
       id: request.id,
       stream: 0,
-      error: err,
+      error: m.toError(err),
       data: null
     })
+  }
+
+  // Returns whether the remote end had already opened its response stream.
+  _onanswered(request) {
+    this._unansweredRequests.delete(request.id)
+    return this._pendingResponses.delete(request.id)
   }
 
   _gcOutgoingRequest(request) {
@@ -255,13 +294,19 @@ module.exports = exports = class RPC {
     this._outgoingResponses.clear()
     this._incomingRequests.clear()
     this._incomingResponses.clear()
-    this._pendingRequests.clear()
     this._pendingResponses.clear()
+    this._unansweredRequests.clear()
 
     for (const stream of streams) stream.destroy(err)
   }
 
+  _fail(err) {
+    this._stream.destroy(err)
+  }
+
   _ondata(data) {
+    if (this._stream.destroying) return
+
     this._buffer.push(data)
     this._buffered += data.byteLength
 
@@ -272,12 +317,24 @@ module.exports = exports = class RPC {
     }
   }
 
+  _onend() {
+    if (this._buffered > 0) this._fail(errors.INVALID_MESSAGE('Truncated frame'))
+  }
+
   _onbeforeframe() {
-    while (this._buffered >= 4) {
+    while (this._buffered >= 4 && !this._stream.destroying) {
       const buffer = this._buffer.length === 1 ? this._buffer[0] : b4a.concat(this._buffer)
 
       this._buffer = [buffer]
       this._frame = 4 + c.uint32.decode(c.state(0, 4, buffer))
+
+      if (this._frame > this._maxFrameSize) {
+        return this._fail(
+          errors.FRAME_TOO_LARGE(
+            `Frame of ${this._frame} bytes exceeds the limit of ${this._maxFrameSize} bytes`
+          )
+        )
+      }
 
       if (this._buffered < this._frame) return
 
@@ -304,52 +361,72 @@ module.exports = exports = class RPC {
     this._onmessage(buffer.subarray(0, frame))
   }
 
-  async _onmessage(buffer) {
+  _onmessage(buffer) {
     let message
     try {
       message = m.message.decode(c.state(0, buffer.length, buffer))
     } catch (err) {
-      safetyCatch(err)
-
-      return this._stream.destroy(err)
+      return this._fail(
+        err instanceof errors ? err : errors.INVALID_MESSAGE(`Malformed message: ${err.message}`)
+      )
     }
 
-    switch (message.type) {
-      case t.REQUEST: {
-        const request =
-          message.id === 0
-            ? new IncomingEvent(this, message.command, message.data)
-            : new IncomingRequest(this, message.id, message.command, message.data)
+    const violation = protocolViolation(message)
 
-        try {
-          await this._onrequest(request)
-        } catch (err) {
-          safetyCatch(err)
+    if (violation !== null) return this._fail(errors.INVALID_MESSAGE(violation))
 
-          if (message.id) this._sendError(request, err)
-          else this._stream.destroy(err)
-        }
-        break
-      }
-      case t.RESPONSE:
-        try {
+    // Handling a message can run user code, such as stream listeners, so route
+    // anything it throws through the connection failure path rather than let it
+    // escape into the underlying stream.
+    try {
+      switch (message.type) {
+        case t.REQUEST:
+          this._onrequestmessage(message)
+          break
+        case t.RESPONSE:
           this._onresponse(message)
-        } catch (err) {
-          safetyCatch(err)
-        }
-        break
-      case t.STREAM:
-        try {
+          break
+        case t.STREAM:
           this._onstream(message)
-        } catch (err) {
-          safetyCatch(err)
-        }
+      }
+    } catch (err) {
+      this._fail(err)
+    }
+  }
+
+  async _onrequestmessage(message) {
+    // A repeated id can only be caught while its request is tracked here, which
+    // is also the only time it could corrupt any state.
+    if (
+      this._unansweredRequests.has(message.id) ||
+      this._incomingRequests.has(message.id) ||
+      this._outgoingResponses.has(message.id)
+    ) {
+      return this._fail(errors.INVALID_MESSAGE(`Request '${message.id}' is already in flight`))
+    }
+
+    let request
+
+    if (message.id === 0) {
+      request = new IncomingEvent(this, message.command, message.data)
+    } else {
+      request = new IncomingRequest(this, message.id, message.command, message.data)
+
+      this._unansweredRequests.add(message.id)
+      this._highestRequestId = Math.max(this._highestRequestId, message.id)
+    }
+
+    try {
+      await this._onrequest(request)
+    } catch (err) {
+      safetyCatch(err)
+
+      if (message.id) this._sendError(request, err)
+      else this._stream.destroy(err)
     }
   }
 
   _onresponse(message) {
-    if (message.id === 0) return
-
     const request = this._outgoingRequests.get(message.id)
     if (request === undefined) return
 
@@ -358,17 +435,36 @@ module.exports = exports = class RPC {
       this._gcOutgoingRequest(request)
 
       request._reject(message.error)
+
+      if (request._responseStream !== null) request._responseStream.destroy(message.error)
+
+      this._releaseRequestStream(request, message.error)
     } else if (message.stream === 0) {
       request._responded = true
       this._gcOutgoingRequest(request)
 
       request._resolve(message.data)
+
+      const stream = request._responseStream
+
+      if (isPushable(stream)) {
+        if (message.data.byteLength > 0) stream.push(message.data)
+        stream.push(null)
+      }
+
+      this._releaseRequestStream(request, null)
     }
   }
 
-  _onstream(message) {
-    if (message.id === 0) return
+  // Once the request is answered, a request stream that the remote end never
+  // opened will never be read, and would otherwise wait for its open forever.
+  _releaseRequestStream(request, err) {
+    const stream = request._requestStream
 
+    if (stream !== null && !stream._acknowledged) stream.destroy(err)
+  }
+
+  _onstream(message) {
     if (message.stream & s.OPEN) this._onstreamopen(message)
     else if (message.stream & s.CLOSE) this._onstreamclose(message)
     else if (message.stream & s.PAUSE) this._onstreampause(message)
@@ -379,123 +475,56 @@ module.exports = exports = class RPC {
   }
 
   _onstreamopen(message) {
-    let stream
-
     if (message.stream & s.REQUEST) {
-      const request = this._outgoingRequests.get(message.id)
-      if (request === undefined) {
-        this._pendingRequests.add(message.id)
-        return
-      }
-
-      stream = request._requestStream
-
-      if (stream === null || stream._pendingOpen === null) {
-        this._pendingRequests.add(message.id)
-        return
-      }
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._outgoingResponses.get(message.id)
-      if (request === undefined) {
-        this._pendingResponses.add(message.id)
-        return
-      }
-
-      stream = request._responseStream
-
-      if (stream === null || stream._pendingOpen === null) {
-        this._pendingResponses.add(message.id)
-        return
-      }
+      const stream = this._outgoingStream(message)
+      if (stream !== null) stream._continueOpen()
     } else {
-      return
-    }
+      const request = this._outgoingResponses.get(message.id)
 
-    stream._continueOpen()
+      if (request !== undefined) return request._responseStream._continueOpen()
+
+      // The remote end opens its response stream as soon as it is created,
+      // which may be before its request arrives or before the handler here
+      // creates the response stream. Remember the open until the response
+      // stream is created, the request is answered, or the remote end destroys
+      // its stream. Any other open is for a request that has already been
+      // answered.
+      if (this._pendingResponses.has(message.id)) return
+
+      if (!this._unansweredRequests.has(message.id) && message.id <= this._highestRequestId) {
+        return
+      }
+
+      if (this._pendingResponses.size >= MAX_PENDING_RESPONSES) {
+        return this._fail(errors.INVALID_MESSAGE('Too many response streams opened early'))
+      }
+
+      this._pendingResponses.add(message.id)
+    }
   }
 
   _onstreamclose(message) {
-    let stream
-
-    if (message.stream & s.REQUEST) {
-      const request = this._incomingRequests.get(message.id)
-      if (request === undefined) return
-
-      stream = request._requestStream
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._incomingResponses.get(message.id)
-      if (request === undefined) return
-
-      stream = request._responseStream
-    } else {
-      return
-    }
-
+    const stream = this._incomingStream(message)
     if (stream === null) return
+
     if (message.error) stream.destroy(message.error)
     else stream.push(null)
   }
 
   _onstreampause(message) {
-    let stream
-
-    if (message.stream & s.REQUEST) {
-      const request = this._outgoingRequests.get(message.id)
-      if (request === undefined) return
-
-      stream = request._requestStream
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._outgoingResponses.get(message.id)
-      if (request === undefined) return
-
-      stream = request._responseStream
-    } else {
-      return
-    }
-
-    if (stream === null) return
-    stream.cork()
+    const stream = this._outgoingStream(message)
+    if (stream !== null) stream.cork()
   }
 
   _onstreamresume(message) {
-    let stream
-
-    if (message.stream & s.REQUEST) {
-      const request = this._outgoingRequests.get(message.id)
-      if (request === undefined) return
-
-      stream = request._requestStream
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._outgoingResponses.get(message.id)
-      if (request === undefined) return
-
-      stream = request._responseStream
-    } else {
-      return
-    }
-
-    if (stream === null) return
-    stream.uncork()
+    const stream = this._outgoingStream(message)
+    if (stream !== null) stream.uncork()
   }
 
   _onstreamdata(message) {
-    let stream
+    const stream = this._incomingStream(message)
+    if (!isPushable(stream)) return
 
-    if (message.stream & s.REQUEST) {
-      const request = this._incomingRequests.get(message.id)
-      if (request === undefined) return
-
-      stream = request._requestStream
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._incomingResponses.get(message.id)
-      if (request === undefined) return
-
-      stream = request._responseStream
-    } else {
-      return
-    }
-
-    if (stream === null) return
     if (stream.push(message.data) === false) {
       this._sendMessage({
         type: t.STREAM,
@@ -508,45 +537,23 @@ module.exports = exports = class RPC {
   }
 
   _onstreamend(message) {
-    let stream
-
-    if (message.stream & s.REQUEST) {
-      const request = this._incomingRequests.get(message.id)
-      if (request === undefined) return
-
-      stream = request._requestStream
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._incomingResponses.get(message.id)
-      if (request === undefined) return
-
-      stream = request._responseStream
-    } else {
-      return
-    }
-
-    if (stream === null) return
-    stream.push(null)
+    const stream = this._incomingStream(message)
+    if (stream !== null) stream.push(null)
   }
 
   _onstreamdestroy(message) {
-    let stream
+    if (message.stream & s.RESPONSE) this._pendingResponses.delete(message.id)
 
-    if (message.stream & s.REQUEST) {
-      const request = this._outgoingRequests.get(message.id)
-      if (request === undefined) return
+    const stream = this._outgoingStream(message)
+    if (stream !== null) stream.destroy(message.error)
+  }
 
-      stream = request._requestStream
-    } else if (message.stream & s.RESPONSE) {
-      const request = this._outgoingResponses.get(message.id)
-      if (request === undefined) return
+  _incomingStream(message) {
+    return findStream(message, this._incomingRequests, this._incomingResponses)
+  }
 
-      stream = request._responseStream
-    } else {
-      return
-    }
-
-    if (stream === null) return
-    stream.destroy(message.error)
+  _outgoingStream(message) {
+    return findStream(message, this._outgoingRequests, this._outgoingResponses)
   }
 
   _ondrain(err = null) {
@@ -559,5 +566,44 @@ module.exports = exports = class RPC {
 }
 
 exports.CommandRouter = CommandRouter
+
+// Messages that decode cleanly but that no valid peer ever sends, as derived
+// from what the outgoing side encodes.
+function protocolViolation(message) {
+  switch (message.type) {
+    case t.REQUEST:
+      if (message.stream === 0) return null
+      if (message.stream !== s.OPEN) return `Invalid request stream flags '${message.stream}'`
+      if (message.id === 0) return 'Stream request without an id'
+      return null
+
+    case t.RESPONSE:
+      if (message.id === 0) return 'Response without an id'
+      if (message.stream === 0) return null
+      if (message.stream !== s.OPEN || message.error) {
+        return `Invalid response stream flags '${message.stream}'`
+      }
+      return null
+
+    case t.STREAM:
+      if (message.id === 0) return 'Stream message without an id'
+      if (!streamFlags.has(message.stream)) return `Invalid stream flags '${message.stream}'`
+      return null
+  }
+}
+
+function findStream(message, requests, responses) {
+  if (message.stream & s.REQUEST) {
+    const request = requests.get(message.id)
+    return request === undefined ? null : request._requestStream
+  }
+
+  const request = responses.get(message.id)
+  return request === undefined ? null : request._responseStream
+}
+
+function isPushable(stream) {
+  return stream !== null && !stream.destroying && !isEnding(stream)
+}
 
 function noop() {}

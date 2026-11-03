@@ -139,7 +139,8 @@ interface RPCOutgoingRequest {
   createRequestStream(opts?: WritableOptions): RPCOutgoingStream
   /**
    * Create a [`Readable`](https://github.com/mafintosh/streamx#readable-stream) stream for
-   * receiving data in reply to the request.
+   * receiving data in reply to the request. If the remote end replies without a stream, the reply
+   * arrives as a single chunk, unless it is empty, and the stream then ends.
    * @param opts - Options for the returned
    * [`Readable`](https://github.com/mafintosh/streamx#readable-stream) stream.
    * @throws {ALREADY_RECEIVED} the response has already been received.
@@ -221,7 +222,9 @@ type RPCRequestHandler = (req: RPCIncomingRequest, data: any) => unknown
 
 interface RPCCommandRouter {
   /**
-   * Answer requests for `command` with `onrequest`, in place of any handler registered before.
+   * Answer requests for `command` with `onrequest`, in place of any handler registered before. A
+   * request for a command with no handler is answered with an error whose code is
+   * `UNKNOWN_COMMAND`, and an event for such a command is dropped.
    * @param command - The command number to answer.
    * @param opts - The encodings of the command.
    * @param onrequest - The handler of the requests.
@@ -235,6 +238,15 @@ declare class RPCCommandRouter {
    * @param opts - The default encodings of the commands.
    */
   constructor(opts?: RPCCommandRouterOptions)
+}
+
+interface RPCOptions {
+  /**
+   * The largest frame to accept from the remote end, in bytes, counting the 4-byte length prefix. A
+   * larger frame fails the connection with `FRAME_TOO_LARGE` as soon as its length prefix arrives.
+   * Defaults to 16 MiB.
+   */
+  maxFrameSize?: number
 }
 
 interface RPC {
@@ -266,10 +278,18 @@ declare class RPC {
    * `RPCIncomingRequest` (or `RPCIncomingEvent`) to inspect and `reply()` to, or an
    * `RPCCommandRouter` that answers each request with the handler of its command. Defaults to a
    * no-op.
+   * @param opts - Options for the connection.
+   *
+   * The remote end is not trusted to send valid frames. A frame that is too large, cannot be
+   * decoded, or breaks the protocol fails the connection: `stream` is destroyed with an `RPCError`
+   * whose code is `FRAME_TOO_LARGE`, `UNKNOWN_MESSAGE` or `INVALID_MESSAGE`, and every request and
+   * stream in flight is rejected or destroyed with it. A frame that refers to a request or stream
+   * that has already finished, or that was never known, is ignored.
    */
   constructor(
     stream: Duplex,
-    onrequest?: ((req: RPCIncomingRequest) => void | Promise<void>) | RPCCommandRouter
+    onrequest?: ((req: RPCIncomingRequest) => void | Promise<void>) | RPCCommandRouter,
+    opts?: RPCOptions
   )
 }
 
@@ -290,7 +310,8 @@ declare namespace RPC {
     type RPCCommandRouterOptions as CommandRouterOptions,
     type RPCRespondOptions as RespondOptions,
     type RPCRequestHandler as RequestHandler,
-    type RPCValueEncoding as ValueEncoding
+    type RPCValueEncoding as ValueEncoding,
+    type RPCOptions as Options
   }
 }
 
