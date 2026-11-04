@@ -124,7 +124,9 @@ interface RPCOutgoingRequest {
    * @param encoding - If given, decodes the reply payload to a string using this encoding; omit to
    * receive the raw `Buffer`.
    * @returns a promise that resolves with the remote end's reply payload, or rejects with the
-   * channel's teardown error if it closes before a reply arrives.
+   * channel's teardown error if it closes before a reply arrives. If the remote end replies with a
+   * stream, the promise rejects with an error whose code is `UNEXPECTED_STREAM`, the remote end's
+   * stream is destroyed, and the connection stays open.
    * @throws {ALREADY_RECEIVED} a reply is already being received for this request.
    */
   reply(encoding?: BufferEncoding): Promise<Buffer | string | null>
@@ -213,18 +215,20 @@ interface RPCRespondOptions {
 }
 
 /**
- * @param req - The incoming request.
+ * @param req - The incoming request. For an event, this is an `RPCIncomingEvent`.
  * @param data - The request data, decoded with the request encoding of the command.
  * @returns the response data, encoded with the response encoding of the command and sent as the
- * reply unless the handler has already replied.
+ * reply unless the handler has already replied. For an event, the return value is ignored and
+ * nothing is sent.
  */
 type RPCRequestHandler = (req: RPCIncomingRequest, data: any) => unknown
 
 interface RPCCommandRouter {
   /**
-   * Answer requests for `command` with `onrequest`, in place of any handler registered before. A
-   * request for a command with no handler is answered with an error whose code is
-   * `UNKNOWN_COMMAND`, and an event for such a command is dropped.
+   * Answer requests for `command` with `onrequest`, in place of any handler registered before.
+   * Events for `command` are also passed to `onrequest`, but are never answered. A request for a
+   * command with no handler is answered with an error whose code is `UNKNOWN_COMMAND`, and an event
+   * for such a command is dropped.
    * @param command - The command number to answer.
    * @param opts - The encodings of the command.
    * @param onrequest - The handler of the requests.
@@ -247,6 +251,12 @@ interface RPCOptions {
    * Defaults to 16 MiB.
    */
   maxFrameSize?: number
+  /**
+   * The most data, in bytes, that one incoming stream may hold before it is read. A remote end that
+   * keeps sending past this limit, rather than stop when asked to pause, fails the connection with
+   * `STREAM_OVERFLOW`. Defaults to 16 MiB.
+   */
+  maxBufferedBytes?: number
 }
 
 interface RPC {
@@ -276,19 +286,23 @@ declare class RPC {
    * @param stream - The duplex stream to frame RPC messages over, such as a pipe or socket.
    * @param onrequest - Callback run for each incoming request or event, receiving an
    * `RPCIncomingRequest` (or `RPCIncomingEvent`) to inspect and `reply()` to, or an
-   * `RPCCommandRouter` that answers each request with the handler of its command. Defaults to a
-   * no-op.
+   * `RPCCommandRouter` that answers each request with the handler of its command. If it throws, the
+   * request is answered with the error, or, if it has already created a response stream, that
+   * stream is destroyed with the error. If it has already replied, nothing more is sent. If
+   * omitted, every request is answered with an error whose code is `UNKNOWN_COMMAND` and every
+   * event is dropped.
    * @param opts - Options for the connection.
    *
    * The remote end is not trusted to send valid frames. A frame that is too large, cannot be
-   * decoded, or breaks the protocol fails the connection: `stream` is destroyed with an `RPCError`
-   * whose code is `FRAME_TOO_LARGE`, `UNKNOWN_MESSAGE` or `INVALID_MESSAGE`, and every request and
-   * stream in flight is rejected or destroyed with it. A frame that refers to a request or stream
+   * decoded, or breaks the protocol fails the connection, and so does a stream that holds more
+   * unread data than `maxBufferedBytes`: `stream` is destroyed with an `RPCError` whose code is
+   * `FRAME_TOO_LARGE`, `UNKNOWN_MESSAGE`, `INVALID_MESSAGE` or `STREAM_OVERFLOW`, and every request
+   * and stream in flight is rejected or destroyed with it. A frame that refers to a request or stream
    * that has already finished, or that was never known, is ignored.
    */
   constructor(
     stream: Duplex,
-    onrequest?: ((req: RPCIncomingRequest) => void | Promise<void>) | RPCCommandRouter,
+    onrequest?: ((req: RPCIncomingRequest) => void | Promise<void>) | RPCCommandRouter | null,
     opts?: RPCOptions
   )
 }
