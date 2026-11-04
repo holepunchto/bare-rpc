@@ -212,13 +212,9 @@ test('data after the end of a stream is ignored', async (t) => {
 
   const stream = req.createResponseStream()
 
-  peer.push(
-    frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.DATA, data: Buffer.from('a') })
-  )
+  peer.push(responseData(1, Buffer.from('a')))
   peer.push(frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.END }))
-  peer.push(
-    frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.DATA, data: Buffer.from('b') })
-  )
+  peer.push(responseData(1, Buffer.from('b')))
   peer.push(frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.END }))
   peer.push(frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.CLOSE }))
 
@@ -375,7 +371,7 @@ test('request handler throwing a non-error sends an error response', async (t) =
     await peer.probe
     await new Promise(setImmediate)
 
-    const response = lastWritten(peer)
+    const response = writtenMessages(peer).at(-1)
 
     t.is(response.type, type.RESPONSE)
     t.is(response.error.message, String(value))
@@ -433,14 +429,14 @@ test('destroying a stream with a non-error sends an error', async (t) => {
   requestStream.destroy('x')
   await closed(requestStream)
 
-  t.is(lastWritten(peer).stream, s.REQUEST | s.CLOSE | s.ERROR)
-  t.is(lastWritten(peer).error.message, 'x')
+  t.is(writtenMessages(peer).at(-1).stream, s.REQUEST | s.CLOSE | s.ERROR)
+  t.is(writtenMessages(peer).at(-1).error.message, 'x')
 
   responseStream.destroy(42)
   await closed(responseStream)
 
-  t.is(lastWritten(peer).stream, s.RESPONSE | s.DESTROY | s.ERROR)
-  t.is(lastWritten(peer).error.message, '42')
+  t.is(writtenMessages(peer).at(-1).stream, s.RESPONSE | s.DESTROY | s.ERROR)
+  t.is(writtenMessages(peer).at(-1).error.message, '42')
 })
 
 test('plain response for a streamed reply arrives on the response stream', async (t) => {
@@ -543,9 +539,7 @@ test('stream ended without a close leaves no state', async (t) => {
 
   const stream = req.createResponseStream().resume()
 
-  requester.push(
-    frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.DATA, data: Buffer.from('a') })
-  )
+  requester.push(responseData(1, Buffer.from('a')))
   requester.push(frame({ type: type.STREAM, id: 1, stream: s.RESPONSE | s.END }))
 
   await closed(stream)
@@ -620,6 +614,136 @@ test('command router leaves no state for a flood of unknown commands', async (t)
 
   t.is(peer.error, null, 'reusing an answered id is not a violation')
   t.ok(peer.written.length > written, 'the request is answered')
+})
+
+test('plain request answered with a stream destroys the stream and keeps the connection', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  req.send()
+
+  const reply = req.reply().catch((err) => err)
+
+  peer.push(frame({ type: type.RESPONSE, id: 1, stream: s.OPEN, error: null }))
+
+  t.is((await reply).code, 'UNEXPECTED_STREAM')
+
+  const destroy = writtenMessages(peer).at(-1)
+  t.is(destroy.type, type.STREAM)
+  t.is(destroy.id, 1)
+  t.is(destroy.stream, s.RESPONSE | s.DESTROY)
+
+  peer.push(responseData(1, Buffer.from('a')))
+  peer.push(event(PROBE))
+
+  await peer.probe
+  t.is(peer.error, null)
+  t.ok(peer.rpc.idle)
+})
+
+test('request handler throwing after opening a response stream sends no second response', async (t) => {
+  let responseStream = null
+
+  const peer = createPeer({}, (req) => {
+    if (req.command === PROBE) return
+    responseStream = req.createResponseStream().on('error', noop)
+    throw new Error('boom')
+  })
+
+  peer.push(request(1))
+
+  await new Promise(setImmediate)
+  await closed(responseStream)
+
+  const messages = writtenMessages(peer)
+
+  t.alike(
+    messages.map((message) => [message.type, message.stream]),
+    [
+      [type.RESPONSE, s.OPEN],
+      [type.STREAM, s.RESPONSE | s.CLOSE | s.ERROR]
+    ]
+  )
+  t.is(messages.at(-1).error.message, 'boom')
+  t.ok(peer.rpc.idle)
+})
+
+test('request handler throwing after replying sends no second response', async (t) => {
+  const peer = createPeer({}, (req) => {
+    if (req.command === PROBE) return
+    req.reply('ok')
+    throw new Error('boom')
+  })
+
+  peer.push(request(1))
+  peer.push(event(PROBE))
+
+  await peer.probe
+
+  const messages = writtenMessages(peer)
+
+  t.is(messages.length, 1)
+  t.is(messages[0].type, type.RESPONSE)
+  t.is(messages[0].error, null)
+  t.alike(messages[0].data, Buffer.from('ok'))
+  t.is(peer.error, null)
+  t.ok(peer.rpc.idle)
+})
+
+test('stream buffering more than maxBufferedBytes of unread data fails the connection', async (t) => {
+  const peer = createPeer({ maxBufferedBytes: 64 })
+
+  const req = peer.rpc.request(1)
+  req.send()
+
+  const errors = []
+
+  const stream = req.createResponseStream().on('error', (err) => errors.push(err.code))
+
+  await new Promise(setImmediate)
+
+  for (let i = 0; i < 4; i++) {
+    peer.push(responseData(1, Buffer.alloc(64)))
+    await new Promise(setImmediate)
+    t.is(stream.read().byteLength, 64)
+  }
+
+  peer.push(responseData(1, Buffer.alloc(64)))
+  peer.push(event(PROBE))
+
+  await peer.probe
+  t.is(peer.error, null, 'a stream at the limit is kept')
+
+  peer.push(responseData(1, Buffer.alloc(1)))
+
+  t.is((await peer.failure).code, 'STREAM_OVERFLOW')
+
+  await closed(stream)
+
+  t.alike(errors, ['STREAM_OVERFLOW'])
+  t.ok(peer.rpc.idle)
+})
+
+test('maxBufferedBytes defaults to 16 MiB', async (t) => {
+  const half = 8 * 1024 * 1024
+
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  req.send()
+
+  req.createResponseStream().on('error', noop)
+
+  peer.push(responseData(1, Buffer.alloc(half)))
+  peer.push(responseData(1, Buffer.alloc(half)))
+  peer.push(event(PROBE))
+
+  await peer.probe
+  t.is(peer.error, null)
+
+  peer.push(responseData(1, Buffer.alloc(1)))
+
+  t.is((await peer.failure).code, 'STREAM_OVERFLOW')
 })
 
 test('fuzzed frames either fail the connection or leave it working', async (t) => {
@@ -776,22 +900,21 @@ function createPeer(opts = {}, onrequest = noop) {
   return peer
 }
 
-function writtenFlags(peer) {
+function writtenMessages(peer) {
   const bytes = Buffer.concat(peer.written)
-  const flags = []
+  const messages = []
 
   for (let start = 0; start < bytes.length;) {
     const end = start + 4 + bytes.readUInt32LE(start)
-    flags.push(m.message.decode(c.state(0, end - start, bytes.subarray(start, end))).stream)
+    messages.push(m.message.decode(c.state(0, end - start, bytes.subarray(start, end))))
     start = end
   }
 
-  return flags
+  return messages
 }
 
-function lastWritten(peer) {
-  const written = peer.written.at(-1)
-  return m.message.decode(c.state(0, written.length, written))
+function writtenFlags(peer) {
+  return writtenMessages(peer).map((message) => message.stream)
 }
 
 function frame(message) {
@@ -801,6 +924,10 @@ function frame(message) {
 
 function request(id, command = 1) {
   return frame({ type: type.REQUEST, id, command, stream: 0, data: Buffer.alloc(0) })
+}
+
+function responseData(id, data) {
+  return frame({ type: type.STREAM, id, stream: s.RESPONSE | s.DATA, data })
 }
 
 function event(command, data = Buffer.alloc(0)) {

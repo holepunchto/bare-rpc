@@ -14,6 +14,7 @@ const OutgoingStream = require('./lib/outgoing-stream')
 const CommandRouter = require('./lib/command-router')
 
 const DEFAULT_MAX_FRAME_SIZE = 16 * 1024 * 1024
+const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024
 const MAX_PENDING_RESPONSES = 1024
 
 const streamFlags = new Set()
@@ -35,11 +36,13 @@ for (const direction of [s.REQUEST, s.RESPONSE]) {
 }
 
 module.exports = exports = class RPC {
-  constructor(stream, onrequest = noop, opts = {}) {
-    const { maxFrameSize = DEFAULT_MAX_FRAME_SIZE } = opts
+  constructor(stream, onrequest = null, opts = {}) {
+    const { maxFrameSize = DEFAULT_MAX_FRAME_SIZE, maxBufferedBytes = DEFAULT_MAX_BUFFERED_BYTES } =
+      opts
 
     this._stream = stream
     this._maxFrameSize = maxFrameSize
+    this._maxBufferedBytes = maxBufferedBytes
     this._id = 0
 
     this._outgoingRequests = new Map()
@@ -57,6 +60,10 @@ module.exports = exports = class RPC {
 
     this._closed = false
     this._error = null
+
+    if (onrequest === null) {
+      onrequest = new CommandRouter()
+    }
 
     if (typeof onrequest === 'function') {
       onrequest = onrequest.bind(this)
@@ -157,6 +164,10 @@ module.exports = exports = class RPC {
 
       this._outgoingRequests.set(request.id, request)
 
+      // Announce the stream right away rather than when it opens, so that the
+      // remote end also learns of a stream that is destroyed before it opens.
+      request._requestStream._sendOpen()
+
       request._requestStream.on('close', () => this._gcOutgoingRequest(request))
     } else {
       request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
@@ -196,6 +207,8 @@ module.exports = exports = class RPC {
       if (this._closed) return request._responseStream.destroy(this._error)
 
       this._outgoingResponses.set(request.id, request)
+
+      request._responseStream._sendOpen()
 
       if (this._onanswered(request)) request._responseStream._continueOpen()
 
@@ -421,8 +434,9 @@ module.exports = exports = class RPC {
     } catch (err) {
       safetyCatch(err)
 
-      if (message.id) this._sendError(request, err)
-      else this._stream.destroy(err)
+      if (message.id === 0) this._stream.destroy(err)
+      else if (request._responseStream !== null) request._responseStream.destroy(err)
+      else if (!request.sent) this._sendError(request, err)
     }
   }
 
@@ -431,19 +445,13 @@ module.exports = exports = class RPC {
     if (request === undefined) return
 
     if (message.error) {
-      request._responded = true
-      this._gcOutgoingRequest(request)
-
-      request._reject(message.error)
+      this._settle(request, message.error, null)
 
       if (request._responseStream !== null) request._responseStream.destroy(message.error)
 
       this._releaseRequestStream(request, message.error)
     } else if (message.stream === 0) {
-      request._responded = true
-      this._gcOutgoingRequest(request)
-
-      request._resolve(message.data)
+      this._settle(request, null, message.data)
 
       const stream = request._responseStream
 
@@ -453,7 +461,29 @@ module.exports = exports = class RPC {
       }
 
       this._releaseRequestStream(request, null)
+    } else if (request._responseStream === null) {
+      const err = errors.UNEXPECTED_STREAM(`Request '${request.id}' was answered with a stream`)
+
+      this._settle(request, err, null)
+
+      this._sendMessage({
+        type: t.STREAM,
+        id: request.id,
+        stream: s.RESPONSE | s.DESTROY,
+        error: null,
+        data: null
+      })
+
+      this._releaseRequestStream(request, err)
     }
+  }
+
+  _settle(request, err, data) {
+    request._responded = true
+    this._gcOutgoingRequest(request)
+
+    if (err) request._reject(err)
+    else request._resolve(data)
   }
 
   // Once the request is answered, a request stream that the remote end never
@@ -525,7 +555,17 @@ module.exports = exports = class RPC {
     const stream = this._incomingStream(message)
     if (!isPushable(stream)) return
 
-    if (stream.push(message.data) === false) {
+    const flushed = stream.push(message.data)
+
+    if (stream._readableState.buffered > this._maxBufferedBytes) {
+      return this._fail(
+        errors.STREAM_OVERFLOW(
+          `Stream buffered more than the limit of ${this._maxBufferedBytes} bytes`
+        )
+      )
+    }
+
+    if (flushed === false) {
       this._sendMessage({
         type: t.STREAM,
         id: stream._request.id,
@@ -605,5 +645,3 @@ function findStream(message, requests, responses) {
 function isPushable(stream) {
   return stream !== null && !stream.destroying && !isEnding(stream)
 }
-
-function noop() {}

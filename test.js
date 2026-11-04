@@ -273,6 +273,73 @@ test('command router, empty request', async (t) => {
   t.alike(await req.reply(), Buffer.from('pong'))
 })
 
+test('command router delivers an event to its responder without replying', async (t) => {
+  t.plan(3)
+
+  const stream = new PassThrough()
+  const router = new RPC.CommandRouter()
+
+  router.respond(42, { requestEncoding: c.uint }, (req, data) => {
+    t.is(data, 7)
+
+    return Buffer.from('ignored')
+  })
+
+  router.respond(43, () => Buffer.from('pong'))
+
+  const rpc = new RPC(stream, router)
+
+  rpc.event(42).send(c.encode(c.uint, 7))
+
+  const req = rpc.request(43)
+  req.send()
+
+  t.alike(await req.reply(), Buffer.from('pong'))
+  t.absent(stream.destroyed)
+})
+
+test('no request handler answers requests with an unknown command error', async (t) => {
+  const stream = new PassThrough()
+  const rpc = new RPC(stream)
+
+  rpc.event(42).send('ping')
+
+  const req = rpc.request(42)
+  req.send('ping')
+
+  await t.exception(req.reply(), { code: 'UNKNOWN_COMMAND' })
+
+  t.absent(stream.destroyed)
+  t.ok(rpc.idle)
+})
+
+test('plain request answered with a stream fails and releases the stream', async (t) => {
+  t.plan(4)
+
+  const rpc = new RPC(new PassThrough(), (req) => {
+    if (req.command !== 42) return req.reply('pong')
+
+    req
+      .createResponseStream()
+      .on('error', noop)
+      .on('close', () => t.pass('response stream released'))
+  })
+
+  const req = rpc.request(42)
+  req.send()
+
+  await t.exception(req.reply(), { code: 'UNEXPECTED_STREAM' })
+
+  const next = rpc.request(43)
+  next.send()
+
+  t.alike(await next.reply(), Buffer.from('pong'))
+
+  await new Promise(setImmediate)
+
+  t.ok(rpc.idle)
+})
+
 test('throw in request handler', async (t) => {
   const rpc = new RPC(new PassThrough(), () => {
     throw Object.assign(new Error('Nope'), { code: 'E_NOPE' })
@@ -540,6 +607,49 @@ test('request and reply stream backpressure, ipc', async (t) => {
   const reply = req.createResponseStream()
 
   reply.on('data', (data) => received.push(data)).on('end', () => t.alike(sent, received))
+})
+
+test('slow reader within maxBufferedBytes, ipc', async (t) => {
+  const ports = IPC.open()
+
+  const a = ports[0].connect()
+  t.teardown(() => a.destroy())
+
+  const b = ports[1].connect()
+  t.teardown(() => b.destroy())
+
+  const chunk = Buffer.alloc(1024, 'a')
+  const count = 2048
+
+  new RPC(a, (req) => {
+    const stream = req.createResponseStream()
+    for (let i = 0; i < count; i++) stream.write(chunk)
+    stream.end()
+  })
+
+  const rpc = new RPC(b, () => {}, { maxBufferedBytes: 256 * 1024 })
+
+  const req = rpc.request(42)
+  req.send()
+
+  const reply = req.createResponseStream()
+
+  let received = 0
+
+  await new Promise((resolve, reject) => {
+    reply.on('error', reject).on('end', resolve)
+
+    const read = () => {
+      let data
+      while ((data = reply.read()) !== null) received += data.byteLength
+      if (!reply.destroyed) setTimeout(read, 20)
+    }
+
+    setTimeout(read, 20)
+  })
+
+  t.is(received, count * chunk.byteLength)
+  t.absent(b.destroyed)
 })
 
 test('event', async (t) => {
