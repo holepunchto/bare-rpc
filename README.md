@@ -110,7 +110,7 @@ req.send('ping')
 await req.reply() // Rejects with the code TIMEOUT if no reply arrives within 5 seconds
 ```
 
-On the answering side, `req.signal` is an `AbortSignal` that aborts when the peer cancels the request, with the `message`, `code` and `errno` it cancelled with. It also aborts when the session ends, with the error it ended with. Once the peer has cancelled the request, `reply()` sends nothing, and an error thrown by the handler is not sent either.
+On the answering side, `req.signal` is an `AbortSignal` that aborts when the peer cancels the request, with the `message`, `code` and `errno` it cancelled with. It also aborts when the session ends, with the error it ended with. Once the peer has cancelled the request, its streams are destroyed with that error, `reply()` sends nothing, and an error thrown by the handler is not sent either.
 
 `RPC` does not create signals on its own. Pass an `AbortController` class as the `AbortController` option, such as the one from [`bare-abort-controller`](https://github.com/holepunchto/bare-abort-controller). Without it, `req.signal` is `null`.
 
