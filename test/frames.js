@@ -4,6 +4,7 @@
 const test = require('brittle')
 const c = require('compact-encoding')
 const { Duplex, PassThrough, Writable } = require('bare-stream')
+const AbortController = require('bare-abort-controller')
 const RPC = require('..')
 const m = require('../lib/messages')
 const { type, stream: s } = require('../lib/constants')
@@ -96,7 +97,8 @@ test('protocol violations fail the connection', async (t) => {
     [{ type: type.STREAM, id: 1, stream: s.REQUEST | s.END | 0x400 }, 'unknown flag'],
     [{ type: type.REQUEST, id: 1, command: 1, stream: s.REQUEST | s.OPEN }, 'request stream flags'],
     [{ type: type.REQUEST, id: 1, command: 1, stream: s.END }, 'request stream flags'],
-    [{ type: type.REQUEST, id: 0, command: 1, stream: s.OPEN }, 'event with a stream']
+    [{ type: type.REQUEST, id: 0, command: 1, stream: s.OPEN }, 'event with a stream'],
+    [{ type: type.CANCEL, id: 0, error }, 'cancel id 0']
   ]
 
   for (const [message, reason] of cases) {
@@ -155,6 +157,7 @@ test('frames for unknown ids are ignored and keep no state', async (t) => {
   }
 
   peer.push(frame({ type: type.STREAM, id: 7, stream: s.REQUEST | s.OPEN }))
+  peer.push(frame({ type: type.CANCEL, id: 7, error }))
   peer.push(event(PROBE))
 
   await peer.probe
@@ -849,6 +852,65 @@ test('fuzzed frames either fail the connection or leave it working', async (t) =
   t.ok(survived > 0, `${survived} runs kept it working`)
 })
 
+test('cancel of a request in flight sends a cancel', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  req.send()
+  req.cancel()
+
+  await t.exception(req.reply(), { code: 'CANCELLED' })
+
+  t.alike(writtenTypes(peer), [type.REQUEST, type.CANCEL])
+  t.is(writtenMessages(peer)[1].error.code, 'CANCELLED')
+  t.ok(peer.rpc.idle)
+})
+
+test('cancel before the request is sent or after it is answered sends nothing', async (t) => {
+  const peer = createPeer()
+
+  const unsent = peer.rpc.request(1)
+  unsent.cancel()
+  unsent.send()
+
+  await t.exception(unsent.reply(), { code: 'CANCELLED' })
+
+  const answered = peer.rpc.request(1)
+  answered.send()
+
+  peer.push(frame({ type: type.RESPONSE, id: answered.id, stream: 0, error: null, data: null }))
+
+  await answered.reply()
+  answered.cancel()
+
+  t.alike(writtenTypes(peer), [type.REQUEST])
+})
+
+test('cancelled request is not answered', async (t) => {
+  const router = new RPC.CommandRouter()
+
+  router.respond(1, (req) => aborted(req.signal))
+
+  router.respond(2, async (req) => {
+    await aborted(req.signal)
+    throw req.signal.reason
+  })
+
+  const peer = createPeer({ AbortController }, router)
+
+  peer.push(request(1, 1))
+  peer.push(request(2, 2))
+  peer.push(frame({ type: type.CANCEL, id: 1, error }))
+  peer.push(frame({ type: type.CANCEL, id: 2, error }))
+  peer.push(event(PROBE))
+
+  await peer.probe
+  await new Promise(setImmediate)
+
+  t.is(peer.written.length, 0)
+  t.ok(peer.rpc.idle)
+})
+
 function createPeer(opts = {}, onrequest = noop) {
   let onprobe
   let onfailure
@@ -911,6 +973,10 @@ function writtenMessages(peer) {
   }
 
   return messages
+}
+
+function writtenTypes(peer) {
+  return writtenMessages(peer).map((message) => message.type)
 }
 
 function writtenFlags(peer) {
@@ -995,6 +1061,10 @@ function openedResponseIds(bytes) {
   }
 
   return ids
+}
+
+function aborted(signal) {
+  return new Promise((resolve) => signal.addEventListener('abort', resolve))
 }
 
 function closed(stream) {

@@ -8,6 +8,8 @@ declare class RPCError extends Error {
   static CHANNEL_CLOSED(msg: string): RPCError
   static UNEXPECTED_STREAM(msg: string): RPCError
   static STREAM_OVERFLOW(msg: string): RPCError
+  static CANCELLED(msg: string): RPCError
+  static TIMEOUT(msg: string): RPCError
 }
 
 export = RPCError
