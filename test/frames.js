@@ -1043,6 +1043,137 @@ test('a request with its answer cannot be cancelled while its request stream is 
   stream.end()
 })
 
+test('a streamed reply that has ended does not time out before it is read', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1, { timeout: 10 })
+  req.send()
+
+  const stream = req.createResponseStream().on('error', noop)
+
+  peer.push(responseData(req.id, Buffer.from('hello')))
+  peer.push(frame({ type: type.STREAM, id: req.id, stream: s.RESPONSE | s.END }))
+
+  await new Promise((resolve) => setTimeout(resolve, 30))
+
+  t.is(await read(stream), 'hello')
+  t.absent(writtenTypes(peer).includes(type.CANCEL))
+  t.ok(peer.rpc.idle)
+})
+
+test('a streamed reply that has ended cannot be cancelled before it is read', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  req.send()
+
+  const stream = req.createResponseStream().on('error', noop)
+
+  peer.push(responseData(req.id, Buffer.from('hello')))
+  peer.push(frame({ type: type.STREAM, id: req.id, stream: s.RESPONSE | s.END }))
+
+  await new Promise(setImmediate)
+
+  req.cancel()
+
+  t.is(await read(stream), 'hello')
+  t.absent(writtenTypes(peer).includes(type.CANCEL))
+  t.ok(peer.rpc.idle)
+})
+
+test('cancel reason without a string code is sent with a default code', async (t) => {
+  const peer = createPeer()
+
+  const timeout = { name: 'TimeoutError', message: 'Timed out', code: 23 }
+  const abort = { name: 'AbortError', message: 'Aborted', code: 20 }
+  const forwarded = new Error('Forwarded')
+  forwarded.code = ''
+
+  const codes = []
+
+  for (const reason of [timeout, abort, forwarded]) {
+    const req = peer.rpc.request(1)
+    req.send()
+    req.cancel(reason)
+
+    t.is(await req.reply().catch((err) => err), reason)
+  }
+
+  for (const message of writtenMessages(peer)) {
+    if (message.type === type.CANCEL) codes.push(message.error.code)
+  }
+
+  t.alike(codes, ['TIMEOUT', 'CANCELLED', 'CANCELLED'])
+})
+
+test('late reply of a cancelled request does not answer a request reusing its id', async (t) => {
+  let late = null
+
+  const peer = createPeer({ AbortController }, async (req) => {
+    if (req.data.toString() === 'a') {
+      await aborted(req.signal)
+      late = req
+    } else {
+      late.reply('a')
+      req.reply('b')
+    }
+  })
+
+  peer.push(frame({ type: type.REQUEST, id: 5, command: 1, stream: 0, data: Buffer.from('a') }))
+  peer.push(frame({ type: type.CANCEL, id: 5, error }))
+
+  await new Promise(setImmediate)
+
+  peer.push(frame({ type: type.REQUEST, id: 5, command: 1, stream: 0, data: Buffer.from('b') }))
+
+  await new Promise(setImmediate)
+
+  const responses = writtenMessages(peer).filter((message) => message.type === type.RESPONSE)
+
+  t.alike(
+    responses.map((message) => message.data.toString()),
+    ['b']
+  )
+  t.ok(peer.rpc.idle)
+})
+
+test('teardown aborts a handler that returned without replying', async (t) => {
+  let req = null
+
+  const peer = createPeer({ AbortController }, (incoming) => {
+    req = incoming
+  })
+
+  peer.push(request(1))
+
+  await new Promise(setImmediate)
+
+  peer.stream.destroy()
+
+  await new Promise(setImmediate)
+
+  t.is(req.signal.reason?.code, 'CHANNEL_CLOSED')
+})
+
+test('teardown aborts a handler that returned after creating a response stream', async (t) => {
+  let req = null
+
+  const peer = createPeer({ AbortController }, (incoming) => {
+    req = incoming
+    req.createResponseStream().on('error', noop)
+  })
+
+  peer.push(request(1))
+
+  await new Promise(setImmediate)
+
+  peer.stream.destroy()
+
+  await new Promise(setImmediate)
+
+  t.is(req.signal.reason?.code, 'CHANNEL_CLOSED')
+})
+
 function createPeer(opts = {}, onrequest = noop) {
   let onprobe
   let onfailure
@@ -1193,6 +1324,16 @@ function openedResponseIds(bytes) {
   }
 
   return ids
+}
+
+async function read(stream) {
+  const chunks = []
+
+  stream.on('data', (chunk) => chunks.push(chunk))
+
+  await closed(stream)
+
+  return Buffer.concat(chunks).toString()
 }
 
 function aborted(signal) {

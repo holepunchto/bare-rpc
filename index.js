@@ -234,8 +234,7 @@ module.exports = exports = class RPC {
       request._responseStream.on('close', () => {
         this._incomingResponses.delete(request.id)
 
-        request._responded = true
-        this._gcOutgoingRequest(request)
+        this._onresponded(request)
       })
     }
   }
@@ -264,6 +263,11 @@ module.exports = exports = class RPC {
     return this._pendingResponses.delete(request.id)
   }
 
+  _onresponded(request) {
+    request._responded = true
+    this._gcOutgoingRequest(request)
+  }
+
   _gcOutgoingRequest(request) {
     // The entry must stay reachable for as long as an incoming message might
     // still target it; until the response has settled and, if the request was
@@ -285,12 +289,6 @@ module.exports = exports = class RPC {
     request._attach()
   }
 
-  _untrackOutgoingRequest(request) {
-    this._outgoingRequests.delete(request.id)
-
-    request._detach()
-  }
-
   // The error that keeps a request from using the channel, or `null` if it may.
   _requestError(request) {
     return this._closed ? this._error : request._reason
@@ -307,7 +305,9 @@ module.exports = exports = class RPC {
     if (request.sent) {
       request._cancelled = true
 
-      this._untrackOutgoingRequest(request)
+      this._outgoingRequests.delete(request.id)
+
+      request._detach()
 
       this._sendMessage({ type: t.CANCEL, id: request.id, error: cancelError(reason), data: null })
     }
@@ -346,6 +346,8 @@ module.exports = exports = class RPC {
 
     for (const request of this._unansweredRequests.values()) request._abort(err)
     for (const request of this._handling) request._abort(err)
+    for (const request of this._incomingRequests.values()) request._abort(err)
+    for (const request of this._outgoingResponses.values()) request._abort(err)
 
     // Collect the streams first, deduplicating as a single request may appear
     // in more than one map, then destroy them once the maps have been cleared.
@@ -356,14 +358,10 @@ module.exports = exports = class RPC {
     }
 
     for (const request of this._incomingRequests.values()) {
-      request._abort(err)
-
       if (request._requestStream !== null) streams.add(request._requestStream)
     }
 
     for (const request of this._outgoingResponses.values()) {
-      request._abort(err)
-
       if (request._responseStream !== null) streams.add(request._responseStream)
     }
 
@@ -554,8 +552,7 @@ module.exports = exports = class RPC {
   }
 
   _settle(request, err, data) {
-    request._responded = true
-    this._gcOutgoingRequest(request)
+    this._onresponded(request)
 
     if (err) request._reject(err)
     else request._resolve(data)
@@ -629,6 +626,8 @@ module.exports = exports = class RPC {
     const stream = this._incomingStream(message)
     if (stream === null) return
 
+    this._onstreamfinish(stream)
+
     if (message.error) stream.destroy(message.error)
     else stream.push(null)
   }
@@ -670,7 +669,17 @@ module.exports = exports = class RPC {
 
   _onstreamend(message) {
     const stream = this._incomingStream(message)
-    if (stream !== null) stream.push(null)
+    if (stream === null) return
+
+    this._onstreamfinish(stream)
+
+    stream.push(null)
+  }
+
+  // A streamed reply has its answer once its end arrives, even if the response
+  // stream has not been read to the end yet.
+  _onstreamfinish(stream) {
+    if (stream._type === t.RESPONSE) this._onresponded(stream._request)
   }
 
   _onstreamdestroy(message) {
@@ -731,7 +740,7 @@ function protocolViolation(message) {
 function cancelError(reason) {
   const err = m.toError(reason)
 
-  if (err.code !== undefined && err.code !== null) return err
+  if (typeof err.code === 'string' && err.code !== '') return err
 
   return {
     message: err.message,

@@ -966,6 +966,35 @@ test('stream frame with error and data flags carries no payload', (t) => {
   t.is(Buffer.concat(collected).toString('hex'), '0d0000000302fd920104676f6e65014502')
 })
 
+test('cancel frame encodes to fixed bytes', (t) => {
+  const hex =
+    '17000000' +
+    '04' +
+    '01' +
+    '09' +
+    Buffer.from('Cancelled').toString('hex') +
+    '09' +
+    Buffer.from('CANCELLED').toString('hex') +
+    '01'
+
+  const encoded = c.encode(m.header, {
+    type: messageType.CANCEL,
+    id: 1,
+    error: { message: 'Cancelled', code: 'CANCELLED', errno: -1 }
+  })
+
+  t.is(Buffer.from(encoded).toString('hex'), hex)
+
+  const bytes = Buffer.from(hex, 'hex')
+  const message = m.message.decode(c.state(0, bytes.length, bytes))
+
+  t.is(message.type, messageType.CANCEL)
+  t.is(message.id, 1)
+  t.is(message.error.message, 'Cancelled')
+  t.is(message.error.code, 'CANCELLED')
+  t.is(message.error.errno, -1)
+})
+
 test('cancel aborts the handler and rejects the reply', async (t) => {
   t.plan(3)
 
