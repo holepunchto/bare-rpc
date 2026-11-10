@@ -96,7 +96,7 @@ The body of a request and the reply to a request can each be read once. Calling 
 
 ## Cancellation
 
-A request you sent can be cancelled with `req.cancel(reason)`. Its reply rejects with `reason`, its streams are destroyed with it, and the peer is told to stop handling the request. `reason` defaults to an `RPCError` with the code `CANCELLED`. Cancelling a request that has finished does nothing, and cancelling one that has not been sent yet keeps it from being sent.
+A request you sent can be cancelled with `req.cancel(reason)`. Its reply rejects with `reason`, its streams are destroyed with it, and the peer is told to stop handling the request. `reason` defaults to an `RPCError` with the code `CANCELLED`. Cancelling a request that has finished does nothing, and cancelling one that has not been sent yet keeps it from being sent. A request has finished once its answer has arrived: a plain reply, or the end of a streamed reply. A request stream that is still open then stays open, so destroy it to stop it.
 
 The peer receives the `message`, `code` and `errno` of `reason`. If `reason` has no `code`, the peer receives the code `TIMEOUT` when `reason` is a `TimeoutError`, such as the reason of a signal from `AbortSignal.timeout()`, and `CANCELLED` otherwise. This only changes what the peer receives; the reply still rejects with `reason` as is.
 

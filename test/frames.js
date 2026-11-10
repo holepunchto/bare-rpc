@@ -1022,6 +1022,27 @@ test('cancel reason without a code is sent with a default code', async (t) => {
   t.is(codes.get(coded.id), 'GAVE_UP')
 })
 
+test('a request with its answer cannot be cancelled while its request stream is open', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1, { timeout: 10 })
+  const stream = req.createRequestStream()
+
+  peer.push(frame({ type: type.STREAM, id: req.id, stream: s.REQUEST | s.OPEN }))
+  peer.push(frame({ type: type.RESPONSE, id: req.id, stream: 0, error: null, data: null }))
+
+  t.alike(await req.reply(), Buffer.alloc(0))
+
+  await new Promise((resolve) => setTimeout(resolve, 30))
+
+  req.cancel()
+
+  t.absent(writtenTypes(peer).includes(type.CANCEL))
+  t.absent(stream.destroyed)
+
+  stream.end()
+})
+
 function createPeer(opts = {}, onrequest = noop) {
   let onprobe
   let onfailure

@@ -154,7 +154,7 @@ interface RPCOutgoingRequest {
   /**
    * Cancel the request. The reply rejects with `reason`, the streams of the request are destroyed
    * with it, and the remote end is told to stop handling the request. Does nothing once the request
-   * has finished.
+   * has finished, which it has once its answer has arrived, even while its request stream is open.
    * @param reason - The error to cancel with (defaults to an `RPCError` with the code `CANCELLED`).
    * If it has no `code`, the remote end receives the code `TIMEOUT` when it is a `TimeoutError` and
    * `CANCELLED` otherwise.
@@ -293,8 +293,8 @@ interface RPCRequestOptions {
    */
   signal?: AbortSignal
   /**
-   * Cancels the request with an `RPCError` with the code `TIMEOUT` if it has not finished this many
-   * milliseconds after it is sent. Defaults to no timeout.
+   * Cancels the request with an `RPCError` with the code `TIMEOUT` if its answer has not arrived
+   * this many milliseconds after it is sent. Defaults to no timeout.
    */
   timeout?: number
 }

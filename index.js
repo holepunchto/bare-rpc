@@ -270,9 +270,13 @@ module.exports = exports = class RPC {
     // streamed, until the outgoing request stream has closed. Either can be the
     // last to arrive, so only remove the entry once both have completed.
     if (!request._responded) return
+
+    // The request has its answer, so it can no longer be cancelled or time out.
+    request._detach()
+
     if (request._requestStream !== null && !request._requestStream.destroyed) return
 
-    this._untrackOutgoingRequest(request)
+    this._outgoingRequests.delete(request.id)
   }
 
   _trackOutgoingRequest(request) {
@@ -293,9 +297,9 @@ module.exports = exports = class RPC {
   }
 
   _cancelRequest(request, reason) {
-    if (request._reason !== null) return
-
-    // A request that was sent but is no longer tracked has already finished.
+    // A request that has its answer has finished, even while its request stream
+    // is still open, and so does one that was sent but is no longer tracked.
+    if (request._reason !== null || request._responded) return
     if (request.sent && this._outgoingRequests.get(request.id) !== request) return
 
     request._reason = reason
