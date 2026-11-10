@@ -1116,6 +1116,27 @@ test('cancel before send releases a response stream the peer was told of', async
   t.ok(rpc.idle)
 })
 
+test('destroying the response stream before the answer cancels the request', (t) => {
+  t.plan(2)
+
+  const rpc = new RPC(
+    new PassThrough(),
+    (req) => {
+      req.signal.addEventListener('abort', () => {
+        t.is(req.signal.reason.code, 'CANCELLED')
+        t.ok(rpc.idle)
+      })
+
+      stream.destroy()
+    },
+    { AbortController }
+  )
+
+  const req = rpc.request(42)
+  const stream = req.createResponseStream().on('error', noop)
+  req.send('ping')
+})
+
 test('teardown aborts the handler', (t) => {
   t.plan(1)
 

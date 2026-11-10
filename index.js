@@ -234,7 +234,12 @@ module.exports = exports = class RPC {
       request._responseStream.on('close', () => {
         this._incomingResponses.delete(request.id)
 
-        this._onresponded(request)
+        // A response stream destroyed before the answer has arrived leaves no
+        // way to read it, so the request is cancelled.
+        if (!request._responded) {
+          const err = request._responseStream.errored
+          this._cancelRequest(request, err ?? errors.CANCELLED('Request was cancelled'))
+        }
       })
     }
   }
@@ -265,6 +270,7 @@ module.exports = exports = class RPC {
 
   _onresponded(request) {
     request._responded = true
+    request._detach()
     this._gcOutgoingRequest(request)
   }
 
@@ -274,9 +280,6 @@ module.exports = exports = class RPC {
     // streamed, until the outgoing request stream has closed. Either can be the
     // last to arrive, so only remove the entry once both have completed.
     if (!request._responded) return
-
-    // The request has its answer, so it can no longer be cancelled or time out.
-    request._detach()
 
     if (request._requestStream !== null && !request._requestStream.destroyed) return
 

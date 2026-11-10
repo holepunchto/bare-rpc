@@ -438,8 +438,10 @@ test('destroying a stream with a non-error sends an error', async (t) => {
   responseStream.destroy(42)
   await closed(responseStream)
 
-  t.is(writtenMessages(peer).at(-1).stream, s.RESPONSE | s.DESTROY | s.ERROR)
-  t.is(writtenMessages(peer).at(-1).error.message, '42')
+  const destroy = writtenMessages(peer).findLast((message) => message.type === type.STREAM)
+
+  t.is(destroy.stream, s.RESPONSE | s.DESTROY | s.ERROR)
+  t.is(destroy.error.message, '42')
 })
 
 test('plain response for a streamed reply arrives on the response stream', async (t) => {
@@ -1135,6 +1137,77 @@ test('late reply of a cancelled request does not answer a request reusing its id
     ['b']
   )
   t.ok(peer.rpc.idle)
+})
+
+test('destroying the response stream with an error cancels the request with it', async (t) => {
+  const peer = createPeer()
+
+  const reason = new Error('Gave up')
+  reason.code = 'GAVE_UP'
+
+  const req = peer.rpc.request(1)
+  req.send()
+
+  const stream = req.createResponseStream().on('error', noop)
+  stream.destroy(reason)
+
+  await closed(stream)
+
+  const cancels = writtenMessages(peer).filter((message) => message.type === type.CANCEL)
+
+  t.alike(
+    cancels.map((message) => message.error.code),
+    ['GAVE_UP']
+  )
+  t.ok(peer.rpc.idle)
+})
+
+test('destroying the response stream before send leaves no state for a streamed reply', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  const stream = req.createResponseStream().on('error', noop)
+  stream.destroy()
+
+  await closed(stream)
+
+  req.send()
+
+  peer.push(frame({ type: type.RESPONSE, id: req.id, stream: s.OPEN, error: null, data: null }))
+  peer.push(frame({ type: type.STREAM, id: req.id, stream: s.RESPONSE | s.END }))
+
+  await new Promise(setImmediate)
+
+  t.absent(writtenTypes(peer).includes(type.REQUEST))
+  t.ok(peer.rpc.idle)
+})
+
+test('a request with its answer clears its timer', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1, { timeout: 60000 })
+  req.send()
+
+  peer.push(frame({ type: type.RESPONSE, id: req.id, stream: 0, error: null, data: null }))
+
+  await req.reply()
+
+  t.is(req._timer, null)
+})
+
+test('cancel after teardown keeps rejecting with the teardown error', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  req.send()
+
+  peer.stream.destroy()
+
+  await closed(peer.stream)
+
+  req.cancel()
+
+  await t.exception(req.reply(), { code: 'CHANNEL_CLOSED' })
 })
 
 test('teardown aborts a handler that returned without replying', async (t) => {
