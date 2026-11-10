@@ -143,9 +143,10 @@ module.exports = exports = class RPC {
   }
 
   _sendRequest(request, data = null) {
-    // Once the channel has been torn down there is nowhere left to send the
-    // request. Skip registering it so that it never leaks into the maps; the
-    // awaiting reply is rejected through `RPCOutgoingRequest.reply()` instead.
+    // Once the channel has been torn down or the request cancelled there is
+    // nowhere left to send the request. Skip registering it so that it never
+    // leaks into the maps; the reply has already been rejected by the cancel,
+    // or is rejected through `RPCOutgoingRequest.reply()` after teardown.
     if (this._requestError(request) !== null) return
 
     this._trackOutgoingRequest(request)
@@ -236,10 +237,7 @@ module.exports = exports = class RPC {
 
         // A response stream destroyed before the answer has arrived leaves no
         // way to read it, so the request is cancelled.
-        if (!request._responded) {
-          const err = request._responseStream.errored
-          this._cancelRequest(request, err ?? errors.CANCELLED('Request was cancelled'))
-        }
+        request.cancel(request._responseStream.errored)
       })
     }
   }
@@ -299,7 +297,7 @@ module.exports = exports = class RPC {
 
   _cancelRequest(request, reason) {
     // A request that has its answer has finished, even while its request stream
-    // is still open, and so does one that was sent but is no longer tracked.
+    // is still open, and so has one that was sent but is no longer tracked.
     if (request._reason !== null || request._responded) return
     if (request.sent && this._outgoingRequests.get(request.id) !== request) return
 

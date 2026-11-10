@@ -1183,8 +1183,6 @@ test('teardown aborts a handler that has replied but still runs', (t) => {
     async (req) => {
       req.reply('pong')
 
-      await new Promise((resolve) => setImmediate(resolve))
-
       req.signal.addEventListener('abort', () => t.is(req.signal.reason.code, 'CHANNEL_CLOSED'))
 
       stream.destroy()
