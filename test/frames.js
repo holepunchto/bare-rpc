@@ -997,6 +997,9 @@ test('cancel reason without a code is sent with a default code', async (t) => {
   const timedOut = peer.rpc.request(1, { signal: AbortController.AbortSignal.timeout(1) })
   timedOut.send()
 
+  // The timer of AbortSignal.timeout() does not keep the loop alive, and nothing else here does.
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
   const reason = new Error('Gave up')
   reason.code = 'GAVE_UP'
 
