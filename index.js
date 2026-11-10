@@ -37,12 +37,16 @@ for (const direction of [s.REQUEST, s.RESPONSE]) {
 
 module.exports = exports = class RPC {
   constructor(stream, onrequest = null, opts = {}) {
-    const { maxFrameSize = DEFAULT_MAX_FRAME_SIZE, maxBufferedBytes = DEFAULT_MAX_BUFFERED_BYTES } =
-      opts
+    const {
+      maxFrameSize = DEFAULT_MAX_FRAME_SIZE,
+      maxBufferedBytes = DEFAULT_MAX_BUFFERED_BYTES,
+      AbortController = null
+    } = opts
 
     this._stream = stream
     this._maxFrameSize = maxFrameSize
     this._maxBufferedBytes = maxBufferedBytes
+    this._AbortController = AbortController
     this._id = 0
 
     this._outgoingRequests = new Map()
@@ -50,7 +54,8 @@ module.exports = exports = class RPC {
     this._incomingRequests = new Map()
     this._incomingResponses = new Map()
     this._pendingResponses = new Set()
-    this._unansweredRequests = new Set()
+    this._handling = new Set()
+    this._unansweredRequests = new Map()
     this._highestRequestId = 0
 
     this._buffer = []
@@ -102,8 +107,8 @@ module.exports = exports = class RPC {
     return new OutgoingEvent(this, command)
   }
 
-  request(command) {
-    return new OutgoingRequest(this, ++this._id, command)
+  request(command, opts) {
+    return new OutgoingRequest(this, ++this._id, command, opts)
   }
 
   _sendMessage(message, cb) {
@@ -138,12 +143,13 @@ module.exports = exports = class RPC {
   }
 
   _sendRequest(request, data = null) {
-    // Once the channel has been torn down there is nowhere left to send the
-    // request. Skip registering it so that it never leaks into the maps; the
-    // awaiting reply is rejected through `RPCOutgoingRequest.reply()` instead.
-    if (this._closed) return
+    // Once the channel has been torn down or the request cancelled there is
+    // nowhere left to send the request. Skip registering it so that it never
+    // leaks into the maps; the reply has already been rejected by the cancel,
+    // or is rejected through `RPCOutgoingRequest.reply()` after teardown.
+    if (this._requestError(request) !== null) return
 
-    this._outgoingRequests.set(request.id, request)
+    this._trackOutgoingRequest(request)
 
     this._sendMessage({
       type: t.REQUEST,
@@ -158,11 +164,13 @@ module.exports = exports = class RPC {
     if (isInitiator) {
       request._requestStream = new OutgoingStream(this, request, t.REQUEST, opts)
 
-      // Once the channel has been torn down there is nowhere left to open the
-      // stream, so destroy it right away rather than leave it hanging.
-      if (this._closed) return request._requestStream.destroy(this._error)
+      // Once the channel has been torn down or the request cancelled there is
+      // nowhere left to open the stream, so destroy it right away rather than
+      // leave it hanging.
+      const err = this._requestError(request)
+      if (err !== null) return request._requestStream.destroy(err)
 
-      this._outgoingRequests.set(request.id, request)
+      this._trackOutgoingRequest(request)
 
       // Announce the stream right away rather than when it opens, so that the
       // remote end also learns of a stream that is destroyed before it opens.
@@ -172,7 +180,8 @@ module.exports = exports = class RPC {
     } else {
       request._requestStream = new IncomingStream(this, request, t.REQUEST, opts)
 
-      if (this._closed) return request._requestStream.destroy(this._error)
+      const err = this._requestError(request)
+      if (err !== null) return request._requestStream.destroy(err)
 
       this._incomingRequests.set(request.id, request)
 
@@ -181,11 +190,11 @@ module.exports = exports = class RPC {
   }
 
   _sendResponse(request, data) {
-    // Once the channel has been torn down there is nowhere left to send the
-    // response, so drop it rather than encode and write a message that would
-    // only be discarded. The reply is fire-and-forget, so there is nothing to
-    // settle.
-    if (this._closed) return
+    // Once the channel has been torn down or the request cancelled there is
+    // no one left to read the response, so drop it rather than write a message
+    // that would only be discarded. The reply is fire-and-forget, so there is
+    // nothing to settle.
+    if (!this._isUnanswered(request)) return
 
     this._onanswered(request)
 
@@ -202,9 +211,11 @@ module.exports = exports = class RPC {
     if (isInitiator) {
       request._responseStream = new OutgoingStream(this, request, t.RESPONSE, opts)
 
-      // Once the channel has been torn down there is nowhere left to open the
-      // stream, so destroy it right away rather than leave it hanging.
-      if (this._closed) return request._responseStream.destroy(this._error)
+      // Once the channel has been torn down or the request cancelled there is
+      // nowhere left to open the stream, so destroy it right away rather than
+      // leave it hanging.
+      const err = this._requestError(request)
+      if (err !== null) return request._responseStream.destroy(err)
 
       this._outgoingResponses.set(request.id, request)
 
@@ -216,20 +227,24 @@ module.exports = exports = class RPC {
     } else {
       request._responseStream = new IncomingStream(this, request, t.RESPONSE, opts)
 
-      if (this._closed) return request._responseStream.destroy(this._error)
+      const err = this._requestError(request)
+      if (err !== null) return request._responseStream.destroy(err)
 
       this._incomingResponses.set(request.id, request)
 
       request._responseStream.on('close', () => {
         this._incomingResponses.delete(request.id)
 
-        request._responded = true
-        this._gcOutgoingRequest(request)
+        // A response stream destroyed before the answer has arrived leaves no
+        // way to read it, so the request is cancelled.
+        request.cancel(request._responseStream.errored)
       })
     }
   }
 
   _sendError(request, err) {
+    if (!this._isUnanswered(request)) return
+
     this._onanswered(request)
 
     this._sendMessage({
@@ -241,10 +256,20 @@ module.exports = exports = class RPC {
     })
   }
 
+  _isUnanswered(request) {
+    return this._unansweredRequests.get(request.id) === request
+  }
+
   // Returns whether the remote end had already opened its response stream.
   _onanswered(request) {
     this._unansweredRequests.delete(request.id)
     return this._pendingResponses.delete(request.id)
+  }
+
+  _onresponded(request) {
+    request._responded = true
+    request._detach()
+    this._gcOutgoingRequest(request)
   }
 
   _gcOutgoingRequest(request) {
@@ -253,9 +278,44 @@ module.exports = exports = class RPC {
     // streamed, until the outgoing request stream has closed. Either can be the
     // last to arrive, so only remove the entry once both have completed.
     if (!request._responded) return
+
     if (request._requestStream !== null && !request._requestStream.destroyed) return
 
     this._outgoingRequests.delete(request.id)
+  }
+
+  _trackOutgoingRequest(request) {
+    this._outgoingRequests.set(request.id, request)
+
+    request._attach()
+  }
+
+  // The error that keeps a request from using the channel, or `null` if it may.
+  _requestError(request) {
+    return this._closed ? this._error : request._reason
+  }
+
+  _cancelRequest(request, reason) {
+    // A request that has its answer has finished, even while its request stream
+    // is still open, and so has one that was sent but is no longer tracked.
+    if (request._reason !== null || request._responded) return
+    if (request.sent && this._outgoingRequests.get(request.id) !== request) return
+
+    request._reason = reason
+
+    if (request.sent) {
+      request._cancelled = true
+
+      this._outgoingRequests.delete(request.id)
+
+      request._detach()
+
+      this._sendMessage({ type: t.CANCEL, id: request.id, error: cancelError(reason), data: null })
+    }
+
+    request._reject(reason)
+
+    destroyStreams(request, reason)
   }
 
   _onerror(err) {
@@ -280,8 +340,15 @@ module.exports = exports = class RPC {
     // Reject any request awaiting a plain reply. Requests whose response is
     // delivered over a stream are torn down through that stream below.
     for (const request of this._outgoingRequests.values()) {
+      request._detach()
+
       if (request.received && request._responseStream === null) request._reject(err)
     }
+
+    for (const request of this._unansweredRequests.values()) request._abort(err)
+    for (const request of this._handling) request._abort(err)
+    for (const request of this._incomingRequests.values()) request._abort(err)
+    for (const request of this._outgoingResponses.values()) request._abort(err)
 
     // Collect the streams first, deduplicating as a single request may appear
     // in more than one map, then destroy them once the maps have been cleared.
@@ -401,6 +468,9 @@ module.exports = exports = class RPC {
           break
         case t.STREAM:
           this._onstream(message)
+          break
+        case t.CANCEL:
+          this._oncancel(message)
       }
     } catch (err) {
       this._fail(err)
@@ -425,9 +495,11 @@ module.exports = exports = class RPC {
     } else {
       request = new IncomingRequest(this, message.id, message.command, message.data)
 
-      this._unansweredRequests.add(message.id)
+      this._unansweredRequests.set(message.id, request)
       this._highestRequestId = Math.max(this._highestRequestId, message.id)
     }
+
+    this._handling.add(request)
 
     try {
       await this._onrequest(request)
@@ -437,6 +509,8 @@ module.exports = exports = class RPC {
       if (message.id === 0) this._stream.destroy(err)
       else if (request._responseStream !== null) request._responseStream.destroy(err)
       else if (!request.sent) this._sendError(request, err)
+    } finally {
+      this._handling.delete(request)
     }
   }
 
@@ -479,8 +553,7 @@ module.exports = exports = class RPC {
   }
 
   _settle(request, err, data) {
-    request._responded = true
-    this._gcOutgoingRequest(request)
+    this._onresponded(request)
 
     if (err) request._reject(err)
     else request._resolve(data)
@@ -492,6 +565,23 @@ module.exports = exports = class RPC {
     const stream = request._requestStream
 
     if (stream !== null && !stream._acknowledged) stream.destroy(err)
+  }
+
+  _oncancel(message) {
+    const request =
+      this._unansweredRequests.get(message.id) ??
+      this._incomingRequests.get(message.id) ??
+      this._outgoingResponses.get(message.id)
+
+    if (request === undefined) return
+
+    request._cancelled = true
+
+    this._onanswered(request)
+
+    request._abort(message.error)
+
+    destroyStreams(request, message.error)
   }
 
   _onstream(message) {
@@ -537,6 +627,8 @@ module.exports = exports = class RPC {
     const stream = this._incomingStream(message)
     if (stream === null) return
 
+    this._onstreamfinish(stream)
+
     if (message.error) stream.destroy(message.error)
     else stream.push(null)
   }
@@ -578,7 +670,17 @@ module.exports = exports = class RPC {
 
   _onstreamend(message) {
     const stream = this._incomingStream(message)
-    if (stream !== null) stream.push(null)
+    if (stream === null) return
+
+    this._onstreamfinish(stream)
+
+    stream.push(null)
+  }
+
+  // A streamed reply has its answer once its end arrives, even if the response
+  // stream has not been read to the end yet.
+  _onstreamfinish(stream) {
+    if (stream._type === t.RESPONSE) this._onresponded(stream._request)
   }
 
   _onstreamdestroy(message) {
@@ -629,7 +731,28 @@ function protocolViolation(message) {
       if (message.id === 0) return 'Stream message without an id'
       if (!streamFlags.has(message.stream)) return `Invalid stream flags '${message.stream}'`
       return null
+
+    case t.CANCEL:
+      if (message.id === 0) return 'Cancel without an id'
+      return null
   }
+}
+
+function cancelError(reason) {
+  const err = m.toError(reason)
+
+  if (typeof err.code === 'string' && err.code !== '') return err
+
+  return {
+    message: err.message,
+    code: err.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED',
+    errno: err.errno
+  }
+}
+
+function destroyStreams(request, err) {
+  if (request._requestStream !== null) request._requestStream.destroy(err)
+  if (request._responseStream !== null) request._responseStream.destroy(err)
 }
 
 function findStream(message, requests, responses) {

@@ -2,6 +2,7 @@ const test = require('brittle')
 const c = require('compact-encoding')
 const { PassThrough } = require('bare-stream')
 const IPC = require('bare-ipc')
+const AbortController = require('bare-abort-controller')
 const RPC = require('.')
 const m = require('./lib/messages')
 const { type: messageType } = require('./lib/constants')
@@ -963,6 +964,235 @@ test('stream frame with error and data flags carries no payload', (t) => {
   })
 
   t.is(Buffer.concat(collected).toString('hex'), '0d0000000302fd920104676f6e65014502')
+})
+
+test('cancel frame encodes to fixed bytes', (t) => {
+  const hex =
+    '17000000' +
+    '04' +
+    '01' +
+    '09' +
+    Buffer.from('Cancelled').toString('hex') +
+    '09' +
+    Buffer.from('CANCELLED').toString('hex') +
+    '01'
+
+  const encoded = c.encode(m.header, {
+    type: messageType.CANCEL,
+    id: 1,
+    error: { message: 'Cancelled', code: 'CANCELLED', errno: -1 }
+  })
+
+  t.is(Buffer.from(encoded).toString('hex'), hex)
+
+  const bytes = Buffer.from(hex, 'hex')
+  const message = m.message.decode(c.state(0, bytes.length, bytes))
+
+  t.is(message.type, messageType.CANCEL)
+  t.is(message.id, 1)
+  t.is(message.error.message, 'Cancelled')
+  t.is(message.error.code, 'CANCELLED')
+  t.is(message.error.errno, -1)
+})
+
+test('cancel aborts the handler and rejects the reply', async (t) => {
+  t.plan(3)
+
+  const rpc = new RPC(
+    new PassThrough(),
+    (req) => {
+      req.signal.addEventListener('abort', () => {
+        t.is(req.signal.reason.code, 'CANCELLED')
+
+        req.reply('late')
+
+        t.ok(rpc.idle)
+      })
+    },
+    { AbortController }
+  )
+
+  const req = rpc.request(42)
+  req.send('ping')
+  req.cancel()
+
+  await t.exception(req.reply(), { code: 'CANCELLED' })
+})
+
+test('timeout cancels the request', async (t) => {
+  t.plan(2)
+
+  const rpc = new RPC(
+    new PassThrough(),
+    (req) => {
+      req.signal.addEventListener('abort', () => t.is(req.signal.reason.code, 'TIMEOUT'))
+    },
+    { AbortController }
+  )
+
+  const req = rpc.request(42, { timeout: 10 })
+  req.send('ping')
+
+  await t.exception(req.reply(), { code: 'TIMEOUT' })
+})
+
+test('aborting the signal cancels the request with its reason', async (t) => {
+  t.plan(3)
+
+  const reason = new Error('Gave up')
+  reason.code = 'GAVE_UP'
+
+  const rpc = new RPC(
+    new PassThrough(),
+    (req) => {
+      req.signal.addEventListener('abort', () => {
+        t.is(req.signal.reason.message, 'Gave up')
+        t.is(req.signal.reason.code, 'GAVE_UP')
+      })
+
+      controller.abort(reason)
+    },
+    { AbortController }
+  )
+
+  const controller = new AbortController()
+
+  const req = rpc.request(42, { signal: controller.signal })
+  req.send('ping')
+
+  t.is(await req.reply().catch((err) => err), reason)
+})
+
+test('cancel destroys the streams of both ends', (t) => {
+  t.plan(5)
+
+  const rpc = new RPC(new PassThrough(), (req) => {
+    req
+      .createRequestStream()
+      .on('error', (err) => t.is(err.code, 'CANCELLED'))
+      .on('data', () => outgoing.cancel())
+      .on('close', onclose)
+
+    req
+      .createResponseStream()
+      .on('error', (err) => t.is(err.code, 'CANCELLED'))
+      .on('close', onclose)
+  })
+
+  const outgoing = rpc.request(42)
+
+  outgoing
+    .createRequestStream()
+    .on('error', (err) => t.is(err.code, 'CANCELLED'))
+    .on('close', onclose)
+    .write('foo')
+
+  outgoing
+    .createResponseStream()
+    .on('error', (err) => t.is(err.code, 'CANCELLED'))
+    .on('close', onclose)
+
+  let closed = 0
+
+  function onclose() {
+    if (++closed === 4) t.ok(rpc.idle)
+  }
+})
+
+test('cancel before send releases a response stream the peer was told of', async (t) => {
+  const rpc = new RPC(new PassThrough())
+
+  const req = rpc.request(42)
+  const stream = req.createResponseStream().on('error', noop)
+
+  await new Promise(setImmediate)
+
+  req.cancel()
+  req.send()
+
+  await new Promise((resolve) => stream.on('close', resolve))
+  await new Promise(setImmediate)
+
+  t.ok(rpc.idle)
+})
+
+test('destroying the response stream before the answer cancels the request', (t) => {
+  t.plan(2)
+
+  const rpc = new RPC(
+    new PassThrough(),
+    (req) => {
+      req.signal.addEventListener('abort', () => {
+        t.is(req.signal.reason.code, 'CANCELLED')
+        t.ok(rpc.idle)
+      })
+
+      stream.destroy()
+    },
+    { AbortController }
+  )
+
+  const req = rpc.request(42)
+  const stream = req.createResponseStream().on('error', noop)
+  req.send('ping')
+})
+
+test('teardown aborts the handler', (t) => {
+  t.plan(1)
+
+  const stream = new PassThrough()
+
+  const rpc = new RPC(
+    stream,
+    (req) => {
+      req.signal.addEventListener('abort', () => t.is(req.signal.reason.code, 'CHANNEL_CLOSED'))
+
+      stream.destroy()
+    },
+    { AbortController }
+  )
+
+  rpc.request(42).send('ping')
+})
+
+test('teardown aborts a running event handler', (t) => {
+  t.plan(1)
+
+  const stream = new PassThrough()
+
+  const rpc = new RPC(
+    stream,
+    (event) => {
+      event.signal.addEventListener('abort', () => t.is(event.signal.reason.code, 'CHANNEL_CLOSED'))
+
+      stream.destroy()
+    },
+    { AbortController }
+  )
+
+  rpc.event(42).send('ping')
+})
+
+test('teardown aborts a handler that has replied but still runs', (t) => {
+  t.plan(1)
+
+  const stream = new PassThrough()
+
+  const rpc = new RPC(
+    stream,
+    async (req) => {
+      req.reply('pong')
+
+      req.signal.addEventListener('abort', () => t.is(req.signal.reason.code, 'CHANNEL_CLOSED'))
+
+      stream.destroy()
+
+      await new Promise(() => {})
+    },
+    { AbortController }
+  )
+
+  rpc.request(42).send('ping')
 })
 
 function noop() {}

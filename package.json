@@ -42,6 +42,7 @@
     "safety-catch": "^1.0.2"
   },
   "devDependencies": {
+    "bare-abort-controller": "^1.1.2",
     "bare-buffer": "^3.0.1",
     "bare-ipc": "^1.1.0",
     "bare-rpc-test": "^0.1.0",
@@ -51,9 +52,13 @@
     "prettier-config-holepunch": "^2.0.0"
   },
   "peerDependencies": {
+    "bare-abort-controller": "*",
     "bare-buffer": "*"
   },
   "peerDependenciesMeta": {
+    "bare-abort-controller": {
+      "optional": true
+    },
     "bare-buffer": {
       "optional": true
     }

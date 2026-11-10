@@ -1,8 +1,9 @@
+import AbortController, { AbortSignal } from 'bare-abort-controller'
 import Buffer, { BufferEncoding } from 'bare-buffer'
 import { Readable, ReadableOptions, Writable, WritableOptions, Duplex } from 'bare-stream'
 
 declare const constants: {
-  type: { REQUEST: 1; RESPONSE: 2; STREAM: 3 }
+  type: { REQUEST: 1; RESPONSE: 2; STREAM: 3; CANCEL: 4 }
   stream: {
     OPEN: number
     CLOSE: number
@@ -23,6 +24,11 @@ interface RPCIncomingEvent {
   readonly command: number
   /** The data buffer sent with the request. */
   readonly data: Buffer | null
+  /**
+   * Aborted when the connection ends while the event is still being handled, with the error it
+   * ended with. `null` unless `RPC` was given an `AbortController`.
+   */
+  readonly signal: AbortSignal | null
 }
 
 declare class RPCIncomingEvent {
@@ -43,11 +49,17 @@ interface RPCIncomingRequest {
   readonly sent: boolean
   /** A boolean for whether the request has received a reply. */
   readonly received: boolean
+  /**
+   * Aborted when the remote end cancels the request, with the error it cancelled with, or when the
+   * connection ends, with the error it ended with. `null` unless `RPC` was given an
+   * `AbortController`.
+   */
+  readonly signal: AbortSignal | null
 
   /**
    * Send a reply to the request. `data` may be a buffer or a string encoded using `encoding`.
    * @param data - The payload to send: a `Buffer`, or a string encoded using `encoding`. Omit to
-   * send no data.
+   * send no data. Once the remote end has cancelled the request, nothing is sent.
    * @param encoding - The encoding used when `data` is a string (defaults to `utf8`).
    * @throws {ALREADY_SENT} a response has already been sent for this request.
    */
@@ -139,6 +151,15 @@ interface RPCOutgoingRequest {
    * @throws {ALREADY_SENT} the request has already been sent.
    */
   createRequestStream(opts?: WritableOptions): RPCOutgoingStream
+  /**
+   * Cancel the request. The reply rejects with `reason`, the streams of the request are destroyed
+   * with it, and the remote end is told to stop handling the request. Does nothing once the request
+   * has finished, which it has once its answer has arrived, even while its request stream is open.
+   * @param reason - The error to cancel with (defaults to an `RPCError` with the code `CANCELLED`).
+   * If it has no `code`, the remote end receives the code `TIMEOUT` when it is a `TimeoutError` and
+   * `CANCELLED` otherwise.
+   */
+  cancel(reason?: unknown): void
   /**
    * Create a [`Readable`](https://github.com/mafintosh/streamx#readable-stream) stream for
    * receiving data in reply to the request. If the remote end replies without a stream, the reply
@@ -257,6 +278,25 @@ interface RPCOptions {
    * `STREAM_OVERFLOW`. Defaults to 16 MiB.
    */
   maxBufferedBytes?: number
+  /**
+   * The `AbortController` class to create the `signal` of each incoming request with. Without it,
+   * `signal` is `null`.
+   */
+  AbortController?: typeof AbortController
+}
+
+interface RPCRequestOptions {
+  /**
+   * Cancels the request with the reason of the signal when it aborts. If the reason has no `code`,
+   * the remote end receives the code `TIMEOUT` when it is a `TimeoutError`, as from
+   * `AbortSignal.timeout()`, and `CANCELLED` otherwise.
+   */
+  signal?: AbortSignal
+  /**
+   * Cancels the request with an `RPCError` with the code `TIMEOUT` if its answer has not arrived
+   * this many milliseconds after it is sent. Defaults to no timeout.
+   */
+  timeout?: number
 }
 
 interface RPC {
@@ -275,10 +315,11 @@ interface RPC {
   /**
    * @param command - A unique number identifying the request; the remote end differentiates
    * requests by it.
+   * @param opts - Options for cancelling the request.
    * @returns an `RPCOutgoingRequest`; call `send()` on it to dispatch the request and `await
    * reply()` for the response.
    */
-  request(command: number): RPCOutgoingRequest
+  request(command: number, opts?: RPCRequestOptions): RPCOutgoingRequest
 }
 
 declare class RPC {
@@ -323,6 +364,7 @@ declare namespace RPC {
     RPCCommandRouter as CommandRouter,
     type RPCCommandRouterOptions as CommandRouterOptions,
     type RPCRespondOptions as RespondOptions,
+    type RPCRequestOptions as RequestOptions,
     type RPCRequestHandler as RequestHandler,
     type RPCValueEncoding as ValueEncoding,
     type RPCOptions as Options

@@ -94,6 +94,40 @@ An incoming stream asks the peer to pause once it buffers its `highWaterMark`, w
 
 The body of a request and the reply to a request can each be read once. Calling `createRequestStream()` on a request of the peer again, or `createResponseStream()` or `reply()` on a request you sent again, throws an `RPCError` with the code `ALREADY_RECEIVED`.
 
+## Cancellation
+
+A request you sent can be cancelled with `req.cancel(reason)`. Its reply rejects with `reason`, its streams are destroyed with it, and the peer is told to stop handling the request. `reason` defaults to an `RPCError` with the code `CANCELLED`. Cancelling a request that has finished does nothing, and cancelling one that has not been sent yet keeps it from being sent. A request has finished once its answer has arrived: a reply, an error, or the end of a streamed reply, whether it ends cleanly or with an error. A request stream that is still open then stays open, so destroy it to stop it. Destroying the response stream before the answer has arrived cancels the request, with the error it was destroyed with if there is one.
+
+The peer receives the `message`, `code` and `errno` of `reason`. If `reason` has no `code`, the peer receives the code `TIMEOUT` when `reason` is a `TimeoutError`, such as the reason of a signal from `AbortSignal.timeout()`, and `CANCELLED` otherwise. This only changes what the peer receives; the reply still rejects with `reason` as is.
+
+`rpc.request(command, opts)` can also cancel the request for you:
+
+- `signal`: An `AbortSignal` that cancels the request with its reason when it aborts.
+- `timeout`: Milliseconds after the request is sent to cancel it with an `RPCError` with the code `TIMEOUT`.
+
+```js
+const req = rpc.request(1, { timeout: 5000 })
+req.send('ping')
+
+await req.reply() // Rejects with the code TIMEOUT if no reply arrives within 5 seconds
+```
+
+On the answering side, `req.signal` is an `AbortSignal` that aborts when the peer cancels the request, with the `message`, `code` and `errno` it cancelled with. It also aborts when the session ends while the handler still runs, with the error it ended with, even if the handler has already replied. Events have a `signal` too, which only aborts when the session ends. Once the peer has cancelled the request, its streams are destroyed with that error, `reply()` sends nothing, and an error thrown by the handler is not sent either.
+
+`RPC` does not create signals on its own. Pass an `AbortController` class as the `AbortController` option, such as the one from [`bare-abort-controller`](https://github.com/holepunchto/bare-abort-controller). Without it, `req.signal` is `null`.
+
+```js
+const AbortController = require('bare-abort-controller')
+
+const rpc = new RPC(stream, router, { AbortController })
+
+router.respond(1, async (req, data) => {
+  return await search(data, { signal: req.signal })
+})
+```
+
+Cancelling a request needs a peer that supports it. A peer without support fails the session with the code `UNKNOWN_MESSAGE` when it receives a cancel.
+
 ## Termination
 
 The session ends with an `RPCError` with the code `CHANNEL_CLOSED` when `stream` closes. It fails with an error instead when:
@@ -103,7 +137,7 @@ The session ends with an `RPCError` with the code `CHANNEL_CLOSED` when `stream`
 - An event handler throws, with that error.
 - The peer sends a bad frame, as described under [Untrusted peers](#untrusted-peers).
 
-Pending replies then reject with the error, and so do later replies. Open streams are destroyed with it, and so are streams created later. Events sent after the end are dropped.
+Pending replies then reject with the error, and so do later replies. Open streams are destroyed with it, and so are streams created later. The signals of requests and events still being handled abort with it. Events sent after the end are dropped.
 
 `RPC` does not close `stream` when the session ends cleanly. When it fails for any reason but an error of `stream`, `RPC` destroys `stream` with the error, so the frames still queued in it are not written. To end the session yourself, destroy `stream`. `rpc.idle` tells whether no requests or streams are in flight, so that it is safe to do so.
 
@@ -113,7 +147,7 @@ Pending replies then reject with the error, and so do later replies. Open stream
 
 - `FRAME_TOO_LARGE`: The frame, with its 4-byte length prefix, is larger than `maxFrameSize`, 16 MiB by default. This is checked as soon as the length prefix arrives, before the rest of the frame is read.
 - `UNKNOWN_MESSAGE`: The frame has a message type that `RPC` does not know.
-- `INVALID_MESSAGE`: The frame cannot be decoded, `stream` ends partway through a frame, or the frame is one that a valid peer never sends. Examples are a response or stream message with an id of 0, a stream message with an invalid set of flags, and a new request that reuses the id of a request that is still in flight.
+- `INVALID_MESSAGE`: The frame cannot be decoded, `stream` ends partway through a frame, or the frame is one that a valid peer never sends. Examples are a response, stream or cancel message with an id of 0, a stream message with an invalid set of flags, and a new request that reuses the id of a request that is still in flight.
 - `STREAM_OVERFLOW`: An incoming stream holds more than `maxBufferedBytes` of data that has not been read. This only happens when the peer keeps sending after it was asked to pause.
 
 A frame that refers to a request or stream that has already finished, or that was never known, is ignored. The same goes for frames that arrive for a stream that has already ended or been destroyed.
