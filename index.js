@@ -54,6 +54,7 @@ module.exports = exports = class RPC {
     this._incomingRequests = new Map()
     this._incomingResponses = new Map()
     this._pendingResponses = new Set()
+    this._handling = new Set()
     this._unansweredRequests = new Map()
     this._highestRequestId = 0
 
@@ -300,9 +301,11 @@ module.exports = exports = class RPC {
     request._reason = reason
 
     if (request.sent) {
+      request._cancelled = true
+
       this._untrackOutgoingRequest(request)
 
-      this._sendMessage({ type: t.CANCEL, id: request.id, error: m.toError(reason), data: null })
+      this._sendMessage({ type: t.CANCEL, id: request.id, error: cancelError(reason), data: null })
     }
 
     request._reject(reason)
@@ -338,6 +341,7 @@ module.exports = exports = class RPC {
     }
 
     for (const request of this._unansweredRequests.values()) request._abort(err)
+    for (const request of this._handling) request._abort(err)
 
     // Collect the streams first, deduplicating as a single request may appear
     // in more than one map, then destroy them once the maps have been cleared.
@@ -492,6 +496,8 @@ module.exports = exports = class RPC {
       this._highestRequestId = Math.max(this._highestRequestId, message.id)
     }
 
+    this._handling.add(request)
+
     try {
       await this._onrequest(request)
     } catch (err) {
@@ -500,6 +506,8 @@ module.exports = exports = class RPC {
       if (message.id === 0) this._stream.destroy(err)
       else if (request._responseStream !== null) request._responseStream.destroy(err)
       else if (!request.sent) this._sendError(request, err)
+    } finally {
+      this._handling.delete(request)
     }
   }
 
@@ -564,6 +572,8 @@ module.exports = exports = class RPC {
       this._outgoingResponses.get(message.id)
 
     if (request === undefined) return
+
+    request._cancelled = true
 
     this._onanswered(request)
 
@@ -711,6 +721,18 @@ function protocolViolation(message) {
     case t.CANCEL:
       if (message.id === 0) return 'Cancel without an id'
       return null
+  }
+}
+
+function cancelError(reason) {
+  const err = m.toError(reason)
+
+  if (err.code !== undefined && err.code !== null) return err
+
+  return {
+    message: err.message,
+    code: err.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED',
+    errno: err.errno
   }
 }
 

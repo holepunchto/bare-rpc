@@ -886,6 +886,26 @@ test('cancel before the request is sent or after it is answered sends nothing', 
   t.alike(writtenTypes(peer), [type.REQUEST])
 })
 
+test('cancel before the streams of a request are announced sends nothing', async (t) => {
+  const peer = createPeer()
+
+  const streamed = peer.rpc.request(1)
+  streamed.cancel()
+
+  const requestStream = streamed.createRequestStream().on('error', noop)
+
+  const replied = peer.rpc.request(1)
+  const responseStream = replied.createResponseStream().on('error', noop)
+  replied.cancel()
+  replied.send()
+
+  await closed(requestStream)
+  await closed(responseStream)
+
+  t.is(peer.written.length, 0)
+  t.ok(peer.rpc.idle)
+})
+
 test('cancelled request is not answered', async (t) => {
   const router = new RPC.CommandRouter()
 
@@ -909,6 +929,94 @@ test('cancelled request is not answered', async (t) => {
 
   t.is(peer.written.length, 0)
   t.ok(peer.rpc.idle)
+})
+
+test('cancel of a streamed request sends no stream frames', async (t) => {
+  const peer = createPeer()
+
+  const req = peer.rpc.request(1)
+  const requestStream = req.createRequestStream().on('error', noop)
+  const responseStream = req.createResponseStream().on('error', noop)
+
+  await new Promise(setImmediate)
+
+  req.cancel()
+
+  await closed(requestStream)
+  await closed(responseStream)
+
+  t.alike(
+    writtenMessages(peer).map((message) => [message.type, message.stream]),
+    [
+      [type.REQUEST, s.OPEN],
+      [type.STREAM, s.RESPONSE | s.OPEN],
+      [type.STREAM, s.RESPONSE | s.RESUME],
+      [type.CANCEL, undefined]
+    ]
+  )
+  t.ok(peer.rpc.idle)
+})
+
+test('cancel destroys a response stream of a request without a request stream', async (t) => {
+  let req = null
+  let stream = null
+  let onerror
+
+  const errored = new Promise((resolve) => {
+    onerror = resolve
+  })
+
+  const peer = createPeer({ AbortController }, (incoming) => {
+    req = incoming
+    stream = req.createResponseStream().on('error', onerror)
+  })
+
+  peer.push(request(1))
+  peer.push(frame({ type: type.CANCEL, id: 1, error }))
+
+  const err = await errored
+
+  t.is(err.message, 'boom')
+  t.is(req.signal.reason, err)
+
+  await closed(stream)
+
+  t.alike(writtenFlags(peer), [s.OPEN])
+  t.ok(peer.rpc.idle)
+})
+
+test('cancel reason without a code is sent with a default code', async (t) => {
+  const peer = createPeer()
+
+  const controller = new AbortController()
+
+  const signalled = peer.rpc.request(1, { signal: controller.signal })
+  signalled.send()
+  controller.abort()
+
+  const timedOut = peer.rpc.request(1, { signal: AbortController.AbortSignal.timeout(1) })
+  timedOut.send()
+
+  const reason = new Error('Gave up')
+  reason.code = 'GAVE_UP'
+
+  const coded = peer.rpc.request(1)
+  coded.send()
+  coded.cancel(reason)
+
+  t.is(await signalled.reply().catch((err) => err), controller.signal.reason)
+  t.is((await timedOut.reply().catch((err) => err)).name, 'TimeoutError')
+  t.is(await coded.reply().catch((err) => err), reason)
+
+  const codes = new Map()
+
+  for (const message of writtenMessages(peer)) {
+    if (message.type === type.CANCEL) codes.set(message.id, message.error.code)
+  }
+
+  t.is(codes.get(signalled.id), 'CANCELLED')
+  t.is(codes.get(timedOut.id), 'TIMEOUT')
+  t.is(codes.get(coded.id), 'GAVE_UP')
 })
 
 function createPeer(opts = {}, onrequest = noop) {

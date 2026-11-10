@@ -98,6 +98,8 @@ The body of a request and the reply to a request can each be read once. Calling 
 
 A request you sent can be cancelled with `req.cancel(reason)`. Its reply rejects with `reason`, its streams are destroyed with it, and the peer is told to stop handling the request. `reason` defaults to an `RPCError` with the code `CANCELLED`. Cancelling a request that has finished does nothing, and cancelling one that has not been sent yet keeps it from being sent.
 
+The peer receives the `message`, `code` and `errno` of `reason`. If `reason` has no `code`, the peer receives the code `TIMEOUT` when `reason` is a `TimeoutError`, such as the reason of a signal from `AbortSignal.timeout()`, and `CANCELLED` otherwise. This only changes what the peer receives; the reply still rejects with `reason` as is.
+
 `rpc.request(command, opts)` can also cancel the request for you:
 
 - `signal`: An `AbortSignal` that cancels the request with its reason when it aborts.
@@ -110,7 +112,7 @@ req.send('ping')
 await req.reply() // Rejects with the code TIMEOUT if no reply arrives within 5 seconds
 ```
 
-On the answering side, `req.signal` is an `AbortSignal` that aborts when the peer cancels the request, with the `message`, `code` and `errno` it cancelled with. It also aborts when the session ends, with the error it ended with. Once the peer has cancelled the request, its streams are destroyed with that error, `reply()` sends nothing, and an error thrown by the handler is not sent either.
+On the answering side, `req.signal` is an `AbortSignal` that aborts when the peer cancels the request, with the `message`, `code` and `errno` it cancelled with. It also aborts when the session ends while the handler still runs, with the error it ended with, even if the handler has already replied. Events have a `signal` too, which only aborts when the session ends. Once the peer has cancelled the request, its streams are destroyed with that error, `reply()` sends nothing, and an error thrown by the handler is not sent either.
 
 `RPC` does not create signals on its own. Pass an `AbortController` class as the `AbortController` option, such as the one from [`bare-abort-controller`](https://github.com/holepunchto/bare-abort-controller). Without it, `req.signal` is `null`.
 
@@ -135,7 +137,7 @@ The session ends with an `RPCError` with the code `CHANNEL_CLOSED` when `stream`
 - An event handler throws, with that error.
 - The peer sends a bad frame, as described under [Untrusted peers](#untrusted-peers).
 
-Pending replies then reject with the error, and so do later replies. Open streams are destroyed with it, and so are streams created later. The signals of requests still being handled abort with it. Events sent after the end are dropped.
+Pending replies then reject with the error, and so do later replies. Open streams are destroyed with it, and so are streams created later. The signals of requests and events still being handled abort with it. Events sent after the end are dropped.
 
 `RPC` does not close `stream` when the session ends cleanly. When it fails for any reason but an error of `stream`, `RPC` destroys `stream` with the error, so the frames still queued in it are not written. To end the session yourself, destroy `stream`. `rpc.idle` tells whether no requests or streams are in flight, so that it is safe to do so.
 

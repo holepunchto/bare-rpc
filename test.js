@@ -1070,6 +1070,23 @@ test('cancel destroys the streams of both ends', (t) => {
   }
 })
 
+test('cancel before send releases a response stream the peer was told of', async (t) => {
+  const rpc = new RPC(new PassThrough())
+
+  const req = rpc.request(42)
+  const stream = req.createResponseStream().on('error', noop)
+
+  await new Promise(setImmediate)
+
+  req.cancel()
+  req.send()
+
+  await new Promise((resolve) => stream.on('close', resolve))
+  await new Promise(setImmediate)
+
+  t.ok(rpc.idle)
+})
+
 test('teardown aborts the handler', (t) => {
   t.plan(1)
 
@@ -1081,6 +1098,48 @@ test('teardown aborts the handler', (t) => {
       req.signal.addEventListener('abort', () => t.is(req.signal.reason.code, 'CHANNEL_CLOSED'))
 
       stream.destroy()
+    },
+    { AbortController }
+  )
+
+  rpc.request(42).send('ping')
+})
+
+test('teardown aborts a running event handler', (t) => {
+  t.plan(1)
+
+  const stream = new PassThrough()
+
+  const rpc = new RPC(
+    stream,
+    (event) => {
+      event.signal.addEventListener('abort', () => t.is(event.signal.reason.code, 'CHANNEL_CLOSED'))
+
+      stream.destroy()
+    },
+    { AbortController }
+  )
+
+  rpc.event(42).send('ping')
+})
+
+test('teardown aborts a handler that has replied but still runs', (t) => {
+  t.plan(1)
+
+  const stream = new PassThrough()
+
+  const rpc = new RPC(
+    stream,
+    async (req) => {
+      req.reply('pong')
+
+      await new Promise((resolve) => setImmediate(resolve))
+
+      req.signal.addEventListener('abort', () => t.is(req.signal.reason.code, 'CHANNEL_CLOSED'))
+
+      stream.destroy()
+
+      await new Promise(() => {})
     },
     { AbortController }
   )

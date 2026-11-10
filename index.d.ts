@@ -24,6 +24,11 @@ interface RPCIncomingEvent {
   readonly command: number
   /** The data buffer sent with the request. */
   readonly data: Buffer | null
+  /**
+   * Aborted when the connection ends while the event is still being handled, with the error it
+   * ended with. `null` unless `RPC` was given an `AbortController`.
+   */
+  readonly signal: AbortSignal | null
 }
 
 declare class RPCIncomingEvent {
@@ -151,6 +156,8 @@ interface RPCOutgoingRequest {
    * with it, and the remote end is told to stop handling the request. Does nothing once the request
    * has finished.
    * @param reason - The error to cancel with (defaults to an `RPCError` with the code `CANCELLED`).
+   * If it has no `code`, the remote end receives the code `TIMEOUT` when it is a `TimeoutError` and
+   * `CANCELLED` otherwise.
    */
   cancel(reason?: unknown): void
   /**
@@ -279,7 +286,11 @@ interface RPCOptions {
 }
 
 interface RPCRequestOptions {
-  /** Cancels the request with the reason of the signal when it aborts. */
+  /**
+   * Cancels the request with the reason of the signal when it aborts. If the reason has no `code`,
+   * the remote end receives the code `TIMEOUT` when it is a `TimeoutError`, as from
+   * `AbortSignal.timeout()`, and `CANCELLED` otherwise.
+   */
   signal?: AbortSignal
   /**
    * Cancels the request with an `RPCError` with the code `TIMEOUT` if it has not finished this many
